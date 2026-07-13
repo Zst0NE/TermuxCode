@@ -1,0 +1,39 @@
+name: termux_ai
+description: An AI-powered mobile terminal client. Control remote hosts over SSH with natural language.
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # State management
+  provider: ^6.1.2
+
+  # SSH client (pure Dart, works on Android/iOS/desktop)
+  dartssh2: ^2.10.0
+
+  # Terminal emulator widget + backend
+  xterm: ^4.0.0
+
+  # Secure storage for API keys / SSH credentials
+  flutter_secure_storage: ^9.2.2
+
+  # HTTP for LLM APIs
+  http: ^1.2.2
+
+  # IDs
+  uuid: ^4.5.1
+
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Termux AI · 成品预览</title>
+<style>
+  :root {
+    --bg: #0b0f0e;
+    --panel: #101615;
+    --card: #15201c;
+    --line: #1f2d28;
+    --text: #e8f2ee;
+    --muted: #8a9a94;
+    --accent: #00e5a0;
+    --accent-dim: rgba(0,229,160,.16);
+    --danger: #ff6b6b;
+    --warn: #f5c542;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: "Segoe UI", system-ui, sans-serif;
+    background: #050807; color: var(--text);
+    min-height: 100vh; display: grid; place-items: center;
+  }
+  .phone {
+    width: min(420px, 100vw); height: min(860px, 100vh);
+    background: var(--bg); border: 1px solid #1c2a25; border-radius: 28px;
+    overflow: hidden; display: flex; flex-direction: column;
+    box-shadow: 0 30px 80px rgba(0,0,0,.55), 0 0 0 8px #0a1210;
+  }
+  .status {
+    height: 28px; padding: 6px 18px 0; font-size: 11px; color: var(--muted);
+    display: flex; justify-content: space-between;
+  }
+  .top {
+    padding: 10px 16px 8px; background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .top h1 { margin: 0; font-size: 18px; font-weight: 650; letter-spacing: .2px; }
+  .pill {
+    font-size: 11px; padding: 4px 8px; border-radius: 999px;
+    background: var(--accent-dim); color: var(--accent); border: 1px solid rgba(0,229,160,.25);
+  }
+  .content { flex: 1; overflow: auto; padding: 12px; }
+  .tab { display: none; height: 100%; }
+  .tab.active { display: flex; flex-direction: column; gap: 10px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 12px 14px;
+  }
+  .card h3 { margin: 0 0 4px; font-size: 15px; }
+  .card p, .muted { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .grow { flex: 1; }
+  button, .btn {
+    border: 0; border-radius: 10px; padding: 8px 12px; cursor: pointer;
+    font-weight: 600; font-size: 13px;
+  }
+  .btn-primary { background: var(--accent); color: #04291d; }
+  .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  .btn-danger { background: rgba(255,107,107,.12); color: var(--danger); border: 1px solid rgba(255,107,107,.3); }
+  .btn-warn { background: rgba(245,197,66,.12); color: var(--warn); border: 1px solid rgba(245,197,66,.3); }
+  .empty {
+    margin: auto; text-align: center; color: var(--muted); padding: 40px 20px;
+  }
+  .empty .icon { font-size: 42px; margin-bottom: 10px; }
+  .nav {
+    display: grid; grid-template-columns: repeat(4,1fr); gap: 4px;
+    background: var(--panel); border-top: 1px solid var(--line); padding: 8px 6px 12px;
+  }
+  .nav button {
+    background: transparent; color: var(--muted); display: grid; gap: 2px; place-items: center;
+    font-size: 11px; font-weight: 500; padding: 8px 4px;
+  }
+  .nav button.active { color: var(--accent); background: var(--accent-dim); }
+  .nav .ico { font-size: 16px; }
+  .term {
+    flex: 1; background: #0c0c0c; border-radius: 12px; border: 1px solid #1a1a1a;
+    padding: 12px; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px;
+    color: #d4d4d4; line-height: 1.5; overflow: auto; min-height: 360px;
+  }
+  .term .g { color: #0dbc79; }
+  .term .c { color: #11a8cd; }
+  .term .w { color: #e5e510; }
+  .chat { display: flex; flex-direction: column; gap: 10px; flex: 1; overflow: auto; }
+  .bubble {
+    max-width: 88%; padding: 10px 12px; border-radius: 14px; font-size: 13px; line-height: 1.45;
+  }
+  .bubble.user { align-self: flex-end; background: #174c3a; }
+  .bubble.bot { align-self: flex-start; background: #1a2421; border: 1px solid var(--line); }
+  .tool {
+    border: 1px dashed rgba(0,229,160,.35); background: rgba(0,229,160,.06);
+    border-radius: 12px; padding: 10px; font-size: 12px;
+  }
+  .tool code { display: block; margin: 6px 0; padding: 8px; background: #0a100e; border-radius: 8px; color: var(--accent); }
+  .inputbar {
+    display: flex; gap: 8px; padding-top: 8px; border-top: 1px solid var(--line);
+  }
+  .inputbar input, .field {
+    width: 100%; background: #121a18; border: 1px solid var(--line); color: var(--text);
+    border-radius: 12px; padding: 10px 12px; outline: none; font-size: 13px;
+  }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 10px 0 6px; }
+  .banner {
+    background: rgba(245,197,66,.1); color: #f0d27a; border: 1px solid rgba(245,197,66,.25);
+    border-radius: 10px; padding: 8px 10px; font-size: 12px;
+  }
+  .header-note {
+    position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+    background: #13201b; border: 1px solid rgba(0,229,160,.3); color: var(--accent);
+    padding: 8px 14px; border-radius: 999px; font-size: 12px; z-index: 10;
+    box-shadow: 0 8px 30px rgba(0,0,0,.35);
+  }
+  @media (max-width: 480px) {
+    .phone { border-radius: 0; border: 0; height: 100vh; width: 100vw; box-shadow: none; }
+    .header-note { top: auto; bottom: 78px; }
+  }
+</style>
+</head>
+<body>
+  <div class="header-note">交互成品预览 · 本机暂无 Flutter SDK，无法真机/模拟器启动</div>
+  <div class="phone">
+    <div class="status"><span>9:41</span><span>Termux AI</span><span>5G ■■□</span></div>
+    <div class="top">
+      <h1 id="title">SSH 主机</h1>
+      <span class="pill" id="connPill">未连接</span>
+    </div>
+    <div class="content">
+      <!-- Profiles -->
+      <div class="tab active" id="tab-conn">
+        <div class="card" id="profileCard">
+          <div class="row">
+            <div class="grow">
+              <h3>home-lab</h3>
+              <p>root@192.168.1.20:22 · 密码</p>
+            </div>
+            <button class="btn-primary" id="btnConnect">连接</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="row">
+            <div class="grow">
+              <h3>vps-tokyo</h3>
+              <p>ubuntu@203.0.113.8:22 · 密钥</p>
+            </div>
+            <button class="btn-ghost" disabled>连接</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>+ 添加主机</h3>
+          <label>主机 / IP</label>
+          <input class="field" placeholder="192.168.1.20" />
+          <label>用户名</label>
+          <input class="field" placeholder="root" />
+          <label>认证</label>
+          <div class="row">
+            <button class="btn-primary">密码</button>
+            <button class="btn-ghost">私钥</button>
+          </div>
+          <div style="height:10px"></div>
+          <button class="btn-primary" style="width:100%">保存到安全存储</button>
+        </div>
+      </div>
+
+      <!-- Terminal -->
+      <div class="tab" id="tab-term">
+        <div class="empty" id="termEmpty">
+          <div class="icon">⌘</div>
+          <div>未连接</div>
+          <p class="muted">请先在「连接」页连上 SSH 主机</p>
+        </div>
+        <div class="term" id="termView" style="display:none">
+          <div><span class="g">root@home-lab</span>:<span class="c">~</span># uname -a</div>
+          <div>Linux home-lab 6.6.0 #1 SMP PREEMPT x86_64 GNU/Linux</div>
+          <div><span class="g">root@home-lab</span>:<span class="c">~</span># df -h /</div>
+          <div>Filesystem      Size  Used Avail Use% Mounted on</div>
+          <div>/dev/sda1        98G   42G   52G  45% /</div>
+          <div><span class="g">root@home-lab</span>:<span class="c">~</span># <span class="w">█</span></div>
+        </div>
+      </div>
+
+      <!-- AI -->
+      <div class="tab" id="tab-ai">
+        <div class="banner" id="aiBanner">未配置 API Key 时会进入演示模式；连接 SSH 后可真实执行命令</div>
+        <div class="chat" id="chat">
+          <div class="bubble bot">你好，我是远程主机助手。用自然语言告诉我你想做什么，例如「看看磁盘还剩多少」。</div>
+        </div>
+        <div class="inputbar">
+          <input id="chatInput" placeholder="输入指令，例如：列出磁盘使用情况" />
+          <button class="btn-primary" id="btnSend">发送</button>
+        </div>
+      </div>
+
+      <!-- Settings -->
+      <div class="tab" id="tab-set">
+        <div class="card">
+          <h3>LLM 提供商（BYOK）</h3>
+          <p>密钥只进系统安全存储，不进普通配置文件</p>
+          <label>协议</label>
+          <div class="row">
+            <button class="btn-primary">OpenAI 兼容</button>
+            <button class="btn-ghost">Anthropic</button>
+          </div>
+          <label>Base URL</label>
+          <input class="field" value="https://api.openai.com/v1" />
+          <label>模型</label>
+          <input class="field" value="gpt-4o" />
+          <label>API Key</label>
+          <input class="field" type="password" value="" placeholder="sk-your-key-here" />
+          <div style="height:12px"></div>
+          <button class="btn-primary" style="width:100%" id="btnSave">保存设置</button>
+        </div>
+        <div class="card">
+          <h3>关于 Termux AI</h3>
+          <p>· SSH 密码 / 私钥登录<br/>· 交互式 PTY 终端（xterm）<br/>· AI 自然语言执行远程命令（需批准）<br/>· BYOK：OpenAI 兼容 / Anthropic</p>
+        </div>
+      </div>
+    </div>
+    <div class="nav">
+      <button class="active" data-tab="conn"><span class="ico">▣</span>连接</button>
+      <button data-tab="term"><span class="ico">⌘</span>终端</button>
+      <button data-tab="ai"><span class="ico">◎</span>AI</button>
+      <button data-tab="set"><span class="ico">⚙</span>设置</button>
+    </div>
+  </div>
+<script>
+  const titles = { conn: 'SSH 主机', term: '终端', ai: 'AI 助手', set: '设置' };
+  let connected = false;
+  const navButtons = document.querySelectorAll('.nav button');
+  navButtons.forEach(btn => btn.addEventListener('click', () => {
+    navButtons.forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    document.getElementById('title').textContent = titles[btn.dataset.tab];
+  }));
+
+  document.getElementById('btnConnect').onclick = () => {
+    connected = !connected;
+    const pill = document.getElementById('connPill');
+    const btn = document.getElementById('btnConnect');
+    if (connected) {
+      pill.textContent = '已连接 · home-lab';
+      btn.textContent = '断开';
+      btn.className = 'btn-danger';
+      document.getElementById('termEmpty').style.display = 'none';
+      document.getElementById('termView').style.display = 'block';
+      document.getElementById('aiBanner').textContent = '已连接 SSH · 命令执行前会请求你批准';
+    } else {
+      pill.textContent = '未连接';
+      btn.textContent = '连接';
+      btn.className = 'btn-primary';
+      document.getElementById('termEmpty').style.display = 'block';
+      document.getElementById('termView').style.display = 'none';
+      document.getElementById('aiBanner').textContent = '未配置 API Key 时会进入演示模式；连接 SSH 后可真实执行命令';
+    }
+  };
+
+  document.getElementById('btnSave').onclick = () => {
+    alert('设置已保存到安全存储（预览）');
+  };
+
+  document.getElementById('btnSend').onclick = sendChat;
+  document.getElementById('chatInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') sendChat();
+  });
+
+  function sendChat() {
+    const input = document.getElementById('chatInput');
+    const text = input.value.trim();
+    if (!text) return;
+    const chat = document.getElementById('chat');
+    chat.insertAdjacentHTML('beforeend', `<div class="bubble user"></div>`);
+    chat.lastChild.textContent = text;
+    input.value = '';
+
+    const bot = document.createElement('div');
+    bot.className = 'bubble bot';
+    if (/磁盘|df|ls|空间|目录/i.test(text)) {
+      bot.innerHTML = `我建议执行以下命令查看磁盘情况：
+        <div class="tool">
+          <div>工具调用 · run_command</div>
+          <code>df -h</code>
+          <div class="row">
+            <button class="btn-primary" onclick="approve(this)">批准</button>
+            <button class="btn-ghost" onclick="this.closest('.tool').insertAdjacentHTML('afterend','<div class=\\'muted\\'>已拒绝</div>')">拒绝</button>
+          </div>
+        </div>`;
+    } else {
+      bot.textContent = connected
+        ? `收到：「${text}」。在真实 App 中会走 LLM + SSH tool loop。`
+        : `收到：「${text}」。请先连接 SSH，并在设置里填 API Key。`;
+    }
+    chat.appendChild(bot);
+    chat.scrollTop = chat.scrollHeight;
+  }
+
+  function approve(btn) {
+    const tool = btn.closest('.tool');
+    tool.insertAdjacentHTML('afterend', connected
+      ? `<div class="bubble bot"><pre style="margin:0;white-space:pre-wrap">exit_code: 0
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/sda1        98G   42G   52G  45% /</pre></div>`
+      : `<div class="bubble bot">请先连接 SSH 主机再执行命令。</div>`);
+    btn.disabled = true;
+  }
+</script>
+</body>
+</html>
