@@ -79,6 +79,46 @@ class SecureStore {
     await _storage.delete(key: _passphraseKey(profileId));
   }
 
+  // --- SSH known hosts -------------------------------------------------
+
+  static const _kKnownHosts = 'ssh_known_hosts_v1';
+
+  String _hostKey(String host, int port) => '${host.toLowerCase()}:$port';
+
+  Future<Map<String, dynamic>> loadKnownHosts() async {
+    final raw = await _storage.read(key: _kKnownHosts);
+    if (raw == null || raw.isEmpty) return {};
+    return (jsonDecode(raw) as Map<String, dynamic>);
+  }
+
+  Future<void> saveKnownHost(
+    String host,
+    int port, {
+    required String type,
+    required String fingerprint,
+  }) async {
+    final hosts = await loadKnownHosts();
+    hosts[_hostKey(host, port)] = {'type': type, 'fingerprint': fingerprint};
+    await _storage.write(key: _kKnownHosts, value: jsonEncode(hosts));
+  }
+
+  Future<void> deleteKnownHost(String host, int port) async {
+    final hosts = await loadKnownHosts();
+    hosts.remove(_hostKey(host, port));
+    await _storage.write(key: _kKnownHosts, value: jsonEncode(hosts));
+  }
+
+  Future<({String type, String fingerprint})?> getKnownHost(
+      String host, int port) async {
+    final hosts = await loadKnownHosts();
+    final entry = hosts[_hostKey(host, port)];
+    if (entry == null) return null;
+    return (
+      type: entry['type'] as String,
+      fingerprint: entry['fingerprint'] as String,
+    );
+  }
+
   // --- LLM config + key ------------------------------------------------
 
   Future<LlmProviderConfig> loadLlmConfig() async {

@@ -34,14 +34,37 @@ class SessionProvider extends ChangeNotifier {
   Terminal? get terminal => _terminal;
 
   /// Connect to [profile] and open an interactive shell.
-  Future<void> connect(SshProfile profile) async {
+  ///
+  /// [onUnknownHostKey] / [onHostKeyMismatch] are forwarded to [SshService]
+  /// so the UI can prompt the user during host-key verification.
+  Future<void> connect(
+    SshProfile profile, {
+    Future<bool> Function(
+      String host,
+      int port,
+      String keyType,
+      String fingerprintDisplay,
+    )? onUnknownHostKey,
+    Future<bool> Function(
+      String host,
+      int port,
+      String keyType,
+      String fingerprintDisplay,
+      String previousFingerprint,
+    )? onHostKeyMismatch,
+  }) async {
     _error = null;
     _state = SshConnectionState.connecting;
     _activeProfile = profile;
     notifyListeners();
 
     try {
-      await _ssh.connect(profile, _store);
+      await _ssh.connect(
+        profile,
+        _store,
+        onUnknownHostKey: onUnknownHostKey,
+        onHostKeyMismatch: onHostKeyMismatch,
+      );
 
       final term = Terminal();
       _terminal = term;

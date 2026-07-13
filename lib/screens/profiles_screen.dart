@@ -50,7 +50,116 @@ class ProfilesScreen extends StatelessWidget {
   Future<void> _connect(BuildContext context, SshProfile profile) async {
     final sessionProv = context.read<SessionProvider>();
     try {
-      await sessionProv.connect(profile);
+      await sessionProv.connect(
+        profile,
+        onUnknownHostKey: (host, port, keyType, fp) async {
+          if (!context.mounted) return false;
+          return await showDialog<bool>(
+                context: context,
+                barrierDismissible: false,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('首次连接此主机'),
+                  content: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('主机：$host:$port'),
+                        const SizedBox(height: 8),
+                        Text('密钥类型：$keyType'),
+                        const SizedBox(height: 8),
+                        const Text('指纹：'),
+                        const SizedBox(height: 4),
+                        SelectableText(
+                          fp,
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        const Text(
+                          '请确认指纹与服务器管理员提供的一致后再信任。',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('取消'),
+                    ),
+                    FilledButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('信任并继续'),
+                    ),
+                  ],
+                ),
+              ) ??
+              false;
+        },
+        onHostKeyMismatch: (host, port, keyType, fp, previous) async {
+          if (!context.mounted) return false;
+          return await showDialog<bool>(
+                context: context,
+                barrierDismissible: false,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('主机密钥已变更'),
+                  content: SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('主机：$host:$port'),
+                        const SizedBox(height: 8),
+                        Text(
+                          '这可能是服务器重装，也可能是中间人攻击。',
+                          style: TextStyle(
+                            color: Theme.of(ctx).colorScheme.error,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text('原先指纹：'),
+                        SelectableText(
+                          previous,
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 11,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text('当前指纹：'),
+                        SelectableText(
+                          fp,
+                          style: const TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 11,
+                          ),
+                        ),
+                        Text('密钥类型：$keyType'),
+                      ],
+                    ),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('中止连接'),
+                    ),
+                    FilledButton(
+                      style: FilledButton.styleFrom(
+                        backgroundColor: Theme.of(ctx).colorScheme.error,
+                      ),
+                      onPressed: () => Navigator.pop(ctx, true),
+                      child: const Text('仍要信任新密钥'),
+                    ),
+                  ],
+                ),
+              ) ??
+              false;
+        },
+      );
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

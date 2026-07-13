@@ -38,3 +38,19 @@ class SshTimeoutException extends SshException {
   @override
   String toString() => 'SshTimeoutException: $message';
 }
+
+/// Thrown when the user declines to trust an unknown host key.
+class SshHostKeyRejectedException extends SshException {
+  const SshHostKeyRejectedException(super.message, {super.cause});
+
+  @override
+  String toString() => 'SshHostKeyRejectedException: $message';
+}
+
+/// Thrown when the stored host key fingerprint doesn't match the server's.
+class SshHostKeyMismatchException extends SshException {
+  const SshHostKeyMismatchException(super.message, {super.cause});
+
+  @override
+  String toString() => 'SshHostKeyMismatchException: $message';
+}

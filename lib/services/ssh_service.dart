@@ -11,6 +11,18 @@ import '../models/ssh_profile.dart';
 import 'secure_store.dart';
 import 'ssh_shell_session.dart';
 
+/// dartssh2 passes fingerprint bytes as UTF-8 of `SHA256:<base64>`
+/// (see dartssh2 `SSHTransport._hostkeyFingerprint`). Decode for display/storage.
+String _formatFingerprint(Uint8List bytes) {
+  try {
+    final s = utf8.decode(bytes);
+    if (s.startsWith('SHA256:')) return s;
+  } catch (_) {
+    // fall through
+  }
+  return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(':');
+}
+
 /// Manages a single SSH connection lifecycle and provides exec / shell APIs.
 ///
 /// Usage:
@@ -56,10 +68,33 @@ class SshService {
   /// Establish an SSH connection for [profile], loading secrets from [store].
   ///
   /// If already connected, the existing session is cleanly disconnected first.
-  /// Throws [SshAuthException] on authentication failure and [SshException]
-  /// for transport / configuration errors.  Secrets are never included in
-  /// exception messages.
-  Future<void> connect(SshProfile profile, SecureStore store) async {
+  /// Throws [SshAuthException] on authentication failure, [SshHostKeyException]
+  /// when the host key is rejected, and [SshException] for other errors.
+  /// Secrets are never included in exception messages.
+  ///
+  /// [onUnknownHostKey] — called on first connection to a host. Return true to
+  /// trust and persist the key; false/null to abort.
+  ///
+  /// [onHostKeyMismatch] — called when the stored fingerprint differs from what
+  /// the server presents. Return true to overwrite the stored entry; false/null
+  /// to abort (likely MITM or server rebuild).
+  Future<void> connect(
+    SshProfile profile,
+    SecureStore store, {
+    Future<bool> Function(
+      String host,
+      int port,
+      String keyType,
+      String fingerprintDisplay,
+    )? onUnknownHostKey,
+    Future<bool> Function(
+      String host,
+      int port,
+      String keyType,
+      String fingerprintDisplay,
+      String previousFingerprint,
+    )? onHostKeyMismatch,
+  }) async {
     if (isConnected || _state == SshConnectionState.connecting) {
       await disconnect();
     }
@@ -109,18 +144,92 @@ class SshService {
           }
       }
 
-      // 4. Handshake + authenticate.
-      // Keep client in a local variable until authentication succeeds so that
-      // the catch block can close it without touching _client.
+      // 4. Handshake + authenticate (with host-key verification).
+      // Record host-key decision so we can surface a clear SshException if
+      // dartssh2 only reports a generic hostkey failure after return false.
+      Object? hostKeyDecisionError;
       client = SSHClient(
         socket,
         username: profile.username,
         onPasswordRequest: onPasswordRequest,
         identities: identities ?? [],
+        onVerifyHostKey: (keyType, fpBytes) async {
+          try {
+            final fp = _formatFingerprint(fpBytes);
+            final known = await store.getKnownHost(profile.host, profile.port);
+
+            if (known == null) {
+              final trust = onUnknownHostKey == null
+                  ? false
+                  : await onUnknownHostKey(
+                      profile.host,
+                      profile.port,
+                      keyType,
+                      fp,
+                    );
+              if (!trust) {
+                hostKeyDecisionError = const SshHostKeyRejectedException(
+                  '用户拒绝信任该主机密钥',
+                );
+                return false;
+              }
+              await store.saveKnownHost(
+                profile.host,
+                profile.port,
+                type: keyType,
+                fingerprint: fp,
+              );
+              return true;
+            }
+
+            if (known.type == keyType && known.fingerprint == fp) {
+              return true;
+            }
+
+            final overwrite = onHostKeyMismatch == null
+                ? false
+                : await onHostKeyMismatch(
+                    profile.host,
+                    profile.port,
+                    keyType,
+                    fp,
+                    known.fingerprint,
+                  );
+            if (!overwrite) {
+              hostKeyDecisionError = SshHostKeyMismatchException(
+                '主机密钥已变更（${profile.host}:${profile.port}），连接已中止',
+              );
+              return false;
+            }
+            await store.saveKnownHost(
+              profile.host,
+              profile.port,
+              type: keyType,
+              fingerprint: fp,
+            );
+            return true;
+          } catch (e) {
+            hostKeyDecisionError = e is SshException
+                ? e
+                : SshException('主机密钥校验失败', cause: e.runtimeType);
+            return false;
+          }
+        },
       );
 
       // Wait for the authentication exchange to settle.
-      await client.authenticated;
+      try {
+        await client.authenticated;
+      } catch (e) {
+        if (hostKeyDecisionError is SshException) {
+          throw hostKeyDecisionError as SshException;
+        }
+        rethrow;
+      }
+
+      if (hostKeyDecisionError is SshException) {
+        throw hostKeyDecisionError as SshException;
+      }
 
       _client = client;
       _setState(SshConnectionState.connected);

@@ -91,8 +91,20 @@ class _ChatScreenState extends State<ChatScreen> {
                         padding: const EdgeInsets.only(bottom: 8),
                         child: MessageBubble(
                           message: msg,
-                          onApprove: (tc) => chat.approveToolCall(tc),
-                          onDecline: (tc) => chat.declineToolCall(tc),
+                          onApprove: msg.role == ChatRole.assistant
+                              ? (tc) {
+                                  if (chat.isAwaitingApproval(tc.id)) {
+                                    chat.approveToolCall(tc);
+                                  }
+                                }
+                              : null,
+                          onDecline: msg.role == ChatRole.assistant
+                              ? (tc) {
+                                  if (chat.isAwaitingApproval(tc.id)) {
+                                    chat.declineToolCall(tc);
+                                  }
+                                }
+                              : null,
                         ),
                       );
                     },

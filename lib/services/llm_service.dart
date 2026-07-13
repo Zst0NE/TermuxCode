@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
@@ -348,10 +349,15 @@ class LlmService {
     required Uri url,
     required Map<String, String> headers,
     required String body,
+    Duration timeout = const Duration(seconds: 90),
   }) async {
     final http.Response response;
     try {
-      response = await _http.post(url, headers: headers, body: body);
+      response = await _http
+          .post(url, headers: headers, body: body)
+          .timeout(timeout);
+    } on TimeoutException {
+      throw LlmException('请求超时（${timeout.inSeconds}s）: ${url.host}');
     } catch (e) {
       throw LlmException('Network error contacting ${url.host}: ${e.runtimeType}');
     }
