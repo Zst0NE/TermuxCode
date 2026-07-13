@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../providers/settings_provider.dart';
+import '../agent/agent.dart';
 import '../models/llm_provider_config.dart';
+import '../providers/chat_provider.dart';
+import '../providers/session_provider.dart';
+import '../providers/settings_provider.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -114,6 +117,29 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     : const Text('保存设置'),
               ),
               const SizedBox(height: 32),
+              _SectionHeader(label: '远端 Coding CLI'),
+              const SizedBox(height: 8),
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        '在已连接的 SSH 主机上探测 OpenCode / Claude Code / Codex（Remote-first）。',
+                        style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
+                      ),
+                      const SizedBox(height: 12),
+                      FilledButton.tonalIcon(
+                        onPressed: () => _detectRemoteCli(context),
+                        icon: const Icon(Icons.search),
+                        label: const Text('探测远端 CLI'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 32),
               _SectionHeader(label: '关于'),
               const SizedBox(height: 8),
               Card(
@@ -131,7 +157,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        'AI 驱动的移动终端客户端，通过自然语言控制远程主机。',
+                        '手机上的 AI Agent 控制面（Remote-first）。包装远端 CLI，内置轻量 Harness。',
                         style: TextStyle(color: cs.onSurfaceVariant, fontSize: 13),
                       ),
                     ],
@@ -141,6 +167,33 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  Future<void> _detectRemoteCli(BuildContext context) async {
+    final session = context.read<SessionProvider>();
+    final chat = context.read<ChatProvider>();
+    if (!session.isConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先在「连接」页连上 SSH')),
+      );
+      return;
+    }
+    await chat.remoteCli.detect();
+    if (!context.mounted) return;
+    final avail = chat.remoteCli.available;
+    final msg = avail.isEmpty
+        ? '未检测到 opencode / claude / codex'
+        : avail.entries.map((e) => '• ${e.key.label}: ${e.value}').join('\n');
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('远端 CLI'),
+        content: SingleChildScrollView(child: Text(msg)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('好的')),
+        ],
       ),
     );
   }

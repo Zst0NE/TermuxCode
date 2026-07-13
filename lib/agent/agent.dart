@@ -12,3 +12,7 @@ export 'tools/default_registry.dart';
 export 'tools/list_tool.dart';
 export 'tools/read_tool.dart';
 export 'tools/shell_tool.dart';
+export 'remote/remote_cli_kind.dart';
+export 'remote/remote_cli_detector.dart';
+export 'remote/remote_cli_adapter.dart';
+export 'remote/remote_cli_session.dart';

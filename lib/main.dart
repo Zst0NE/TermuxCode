@@ -36,7 +36,7 @@ class TermuxCodeApp extends StatelessWidget {
           create: (_) => SettingsProvider(store)..load(),
         ),
         ChangeNotifierProvider(
-          create: (_) => ChatProvider(store: store, ssh: ssh),
+          create: (_) => ChatProvider(store: store, ssh: ssh)..loadHistory(),
         ),
       ],
       child: MaterialApp(

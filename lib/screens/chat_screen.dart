@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../agent/agent_mode.dart';
+import '../agent/agent.dart';
 import '../models/chat_message.dart';
 import '../providers/chat_provider.dart';
 import '../providers/session_provider.dart';
@@ -56,6 +56,25 @@ class _ChatScreenState extends State<ChatScreen> {
       appBar: AppBar(
         title: const Text('TermuxCode'),
         actions: [
+          IconButton(
+            tooltip: '探测远端 CLI',
+            onPressed: chat.isBusy || !session.isConnected
+                ? null
+                : () async {
+                    await chat.remoteCli.detect();
+                    if (!context.mounted) return;
+                    final avail = chat.remoteCli.available;
+                    final text = avail.isEmpty
+                        ? '未检测到 opencode / claude / codex'
+                        : avail.entries
+                            .map((e) => '${e.key.label}: ${e.value}')
+                            .join('\n');
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text(text)),
+                    );
+                  },
+            icon: const Icon(Icons.dns_outlined),
+          ),
           if (chat.messages.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.delete_sweep_outlined),
@@ -140,7 +159,26 @@ class _ChatScreenState extends State<ChatScreen> {
               final text = _inputCtrl.text.trim();
               if (text.isEmpty) return;
               _inputCtrl.clear();
-              chat.sendMessage(text);
+              // Prefix: /cli ... → host OpenCode/Claude/Codex adapter
+              if (text.startsWith('/cli ')) {
+                chat.runRemoteCli(text.substring(5));
+              } else if (text == '/cli') {
+                chat.remoteCli.detect().then((_) {
+                  if (!context.mounted) return;
+                  final avail = chat.remoteCli.available;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        avail.isEmpty
+                            ? '未检测到远端 CLI'
+                            : '可用: ${avail.keys.map((k) => k.label).join(", ")}',
+                      ),
+                    ),
+                  );
+                });
+              } else {
+                chat.sendMessage(text);
+              }
             },
           ),
         ],

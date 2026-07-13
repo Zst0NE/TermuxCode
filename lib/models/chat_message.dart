@@ -24,6 +24,18 @@ class ToolCall {
     required this.command,
     this.rationale,
   });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'command': command,
+        if (rationale != null) 'rationale': rationale,
+      };
+
+  factory ToolCall.fromJson(Map<String, dynamic> json) => ToolCall(
+        id: json['id'] as String,
+        command: json['command'] as String? ?? '',
+        rationale: json['rationale'] as String?,
+      );
 }
 
 /// The outcome of executing a [ToolCall] over SSH.
@@ -51,6 +63,26 @@ class ToolResult {
     this.timedOut = false,
     this.truncated = false,
   });
+
+  Map<String, dynamic> toJson() => {
+        'toolCallId': toolCallId,
+        'exitCode': exitCode,
+        'stdout': stdout,
+        'stderr': stderr,
+        'declined': declined,
+        'timedOut': timedOut,
+        'truncated': truncated,
+      };
+
+  factory ToolResult.fromJson(Map<String, dynamic> json) => ToolResult(
+        toolCallId: json['toolCallId'] as String? ?? '',
+        exitCode: json['exitCode'] as int? ?? -1,
+        stdout: json['stdout'] as String? ?? '',
+        stderr: json['stderr'] as String? ?? '',
+        declined: json['declined'] as bool? ?? false,
+        timedOut: json['timedOut'] as bool? ?? false,
+        truncated: json['truncated'] as bool? ?? false,
+      );
 
   /// Compact text handed back to the model. We cap size so a runaway `cat`
   /// of a huge file cannot blow up the context window.
@@ -109,4 +141,52 @@ class ChatMessage {
         createdAt = createdAt ?? DateTime.now();
 
   bool get hasToolCalls => toolCalls.isNotEmpty;
+
+  static String _clip(String s, [int max = 8000]) =>
+      s.length <= max ? s : '${s.substring(0, max)}…';
+
+  Map<String, dynamic> toJson() {
+    Map<String, dynamic>? trJson;
+    final tr = toolResult;
+    if (tr != null) {
+      trJson = ToolResult(
+        toolCallId: tr.toolCallId,
+        exitCode: tr.exitCode,
+        stdout: _clip(tr.stdout),
+        stderr: _clip(tr.stderr),
+        declined: tr.declined,
+        timedOut: tr.timedOut,
+        truncated: tr.truncated,
+      ).toJson();
+    }
+    return {
+      'id': id,
+      'role': role.name,
+      'text': _clip(text),
+      'toolCalls': toolCalls.map((t) => t.toJson()).toList(),
+      if (trJson != null) 'toolResult': trJson,
+      'createdAt': createdAt.toIso8601String(),
+    };
+  }
+
+  factory ChatMessage.fromJson(Map<String, dynamic> json) {
+    final roleName = json['role'] as String? ?? 'assistant';
+    final role = ChatRole.values.firstWhere(
+      (r) => r.name == roleName,
+      orElse: () => ChatRole.assistant,
+    );
+    final rawCalls = json['toolCalls'] as List<dynamic>? ?? const [];
+    final tr = json['toolResult'];
+    return ChatMessage(
+      id: json['id'] as String?,
+      role: role,
+      text: json['text'] as String? ?? '',
+      toolCalls: rawCalls
+          .map((e) => ToolCall.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      toolResult: tr is Map<String, dynamic> ? ToolResult.fromJson(tr) : null,
+      createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
+          DateTime.now(),
+    );
+  }
 }

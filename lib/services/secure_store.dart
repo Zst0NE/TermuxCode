@@ -25,6 +25,7 @@ class SecureStore {
   static const _kProfiles = 'ssh_profiles_v1';
   static const _kLlmConfig = 'llm_config_v1';
   static const _kLlmApiKey = 'llm_api_key_v1';
+  static const _kChatHistory = 'agent_chat_history_v1';
 
   String _pwKey(String id) => 'ssh_pw_$id';
   String _keyKey(String id) => 'ssh_key_$id';
@@ -136,5 +137,29 @@ class SecureStore {
 
   Future<void> saveLlmApiKey(String key) async {
     await _storage.write(key: _kLlmApiKey, value: key);
+  }
+
+  // --- Agent chat history (non-secret transcript) -------------------------
+
+  /// Persist recent chat messages (JSON list). Keeps at most [maxMessages].
+  Future<void> saveChatHistory(
+    List<Map<String, dynamic>> messages, {
+    int maxMessages = 100,
+  }) async {
+    final clipped = messages.length <= maxMessages
+        ? messages
+        : messages.sublist(messages.length - maxMessages);
+    await _storage.write(key: _kChatHistory, value: jsonEncode(clipped));
+  }
+
+  Future<List<Map<String, dynamic>>> loadChatHistory() async {
+    final raw = await _storage.read(key: _kChatHistory);
+    if (raw == null || raw.isEmpty) return [];
+    final list = jsonDecode(raw) as List<dynamic>;
+    return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  }
+
+  Future<void> clearChatHistory() async {
+    await _storage.delete(key: _kChatHistory);
   }
 }

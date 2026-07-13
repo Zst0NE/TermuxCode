@@ -23,17 +23,21 @@ class ChatProvider extends ChangeNotifier {
       registry: stack.registry,
       gate: stack.gate,
     );
+    _remote = RemoteCliSession(_ssh);
   }
 
   final SecureStore _store;
   final SshService _ssh;
   final LlmService _llm;
   late final AgentRuntime _runtime;
+  late final RemoteCliSession _remote;
 
   final List<ChatMessage> _messages = [];
   bool _busy = false;
+  bool _loaded = false;
   String? _error;
   AgentMode _mode = AgentMode.build;
+  Timer? _saveDebounce;
 
   final Map<String, Completer<bool>> _approvalWaiters = {};
   final Set<String> _resolvedToolCalls = {};
@@ -41,8 +45,10 @@ class ChatProvider extends ChangeNotifier {
   List<ChatMessage> get messages => List.unmodifiable(_messages);
   bool get isBusy => _busy;
   bool get sending => _busy;
+  bool get historyLoaded => _loaded;
   String? get error => _error;
   AgentMode get mode => _mode;
+  RemoteCliSession get remoteCli => _remote;
 
   void setMode(AgentMode mode) {
     if (_mode == mode || _busy) return;
@@ -53,6 +59,35 @@ class ChatProvider extends ChangeNotifier {
   bool isAwaitingApproval(String id) =>
       _approvalWaiters.containsKey(id) && !_resolvedToolCalls.contains(id);
 
+  /// Restore transcript from secure storage (call once after create).
+  Future<void> loadHistory() async {
+    if (_loaded) return;
+    try {
+      final raw = await _store.loadChatHistory();
+      _messages
+        ..clear()
+        ..addAll(raw.map(ChatMessage.fromJson));
+    } catch (e) {
+      _error = '恢复对话失败: $e';
+    } finally {
+      _loaded = true;
+      notifyListeners();
+    }
+  }
+
+  void _scheduleSave() {
+    _saveDebounce?.cancel();
+    _saveDebounce = Timer(const Duration(milliseconds: 400), () async {
+      try {
+        await _store.saveChatHistory(
+          _messages.map((m) => m.toJson()).toList(),
+        );
+      } catch (_) {
+        // Persistence must not break chat.
+      }
+    });
+  }
+
   Future<void> sendMessage(String text) async {
     if (text.trim().isEmpty || _busy) return;
     _error = null;
@@ -61,6 +96,7 @@ class ChatProvider extends ChangeNotifier {
     _messages.add(userMsg);
     _busy = true;
     notifyListeners();
+    _scheduleSave();
 
     try {
       final cfg = await _store.loadLlmConfig();
@@ -112,6 +148,58 @@ class ChatProvider extends ChangeNotifier {
       _busy = false;
       _cancelPendingWaiters();
       notifyListeners();
+      _scheduleSave();
+    }
+  }
+
+  /// Run prompt on host-side OpenCode/Claude/Codex if detected.
+  Future<void> runRemoteCli(String prompt) async {
+    if (prompt.trim().isEmpty || _busy) return;
+    if (!_ssh.isConnected) {
+      _error = '请先连接 SSH';
+      notifyListeners();
+      return;
+    }
+    _busy = true;
+    _error = null;
+    _messages.add(ChatMessage(
+      role: ChatRole.user,
+      text: '[Remote CLI] ${prompt.trim()}',
+    ));
+    notifyListeners();
+    try {
+      if (!_remote.hasAny) {
+        await _remote.detect();
+      }
+      if (!_remote.hasAny) {
+        _messages.add(ChatMessage(
+          role: ChatRole.assistant,
+          text:
+              '远端未检测到 opencode / claude / codex。请在主机安装 CLI，或在终端中手动运行。\n'
+              '${_remote.lastError ?? ''}',
+        ));
+        return;
+      }
+      final kind = _remote.selected!;
+      final buf = StringBuffer();
+      await for (final chunk
+          in RemoteCliAdapter(_ssh).runPrompt(kind, prompt.trim())) {
+        buf.writeln(chunk);
+      }
+      _messages.add(ChatMessage(
+        role: ChatRole.assistant,
+        text: '### ${kind.label} 输出\n\n```\n${buf.toString().trim()}\n```',
+      ));
+    } catch (e) {
+      _error = '$e';
+      _messages.add(ChatMessage(
+        role: ChatRole.assistant,
+        text: 'Remote CLI 失败：$e',
+      ));
+    } finally {
+      _busy = false;
+      notifyListeners();
+      _scheduleSave();
     }
   }
 
@@ -136,7 +224,6 @@ class ChatProvider extends ChangeNotifier {
           ],
         ));
       case AgentPermissionRequest():
-        // Buttons appear via isAwaitingApproval; assistant tool cards already shown.
         notifyListeners();
         return;
       case AgentToolFinished(:final result):
@@ -165,6 +252,7 @@ class ChatProvider extends ChangeNotifier {
         return;
     }
     notifyListeners();
+    _scheduleSave();
   }
 
   Future<void> approveToolCall(ToolCall call) async {
@@ -181,11 +269,14 @@ class ChatProvider extends ChangeNotifier {
     _resolveWaiter(call.id, false);
   }
 
-  void clearMessages() {
+  Future<void> clearMessages() async {
     _cancelPendingWaiters();
     _messages.clear();
     _resolvedToolCalls.clear();
     notifyListeners();
+    try {
+      await _store.clearChatHistory();
+    } catch (_) {}
   }
 
   void clearError() {
@@ -195,6 +286,7 @@ class ChatProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _saveDebounce?.cancel();
     _cancelPendingWaiters();
     _llm.dispose();
     super.dispose();
