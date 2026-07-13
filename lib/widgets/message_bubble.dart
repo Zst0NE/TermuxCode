@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_markdown/flutter_markdown.dart';
 
 import '../models/chat_message.dart';
 import 'tool_call_card.dart';
@@ -91,6 +92,7 @@ class _AssistantBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final baseStyle = TextStyle(color: cs.onSurface, fontSize: 14, height: 1.35);
     return Align(
       alignment: Alignment.centerLeft,
       child: Container(
@@ -106,7 +108,34 @@ class _AssistantBubble extends StatelessWidget {
             bottomRight: Radius.circular(16),
           ),
         ),
-        child: Text(text, style: TextStyle(color: cs.onSurface)),
+        child: MarkdownBody(
+          data: text,
+          selectable: true,
+          softLineBreak: true,
+          styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context)).copyWith(
+            p: baseStyle,
+            h1: baseStyle.copyWith(fontSize: 18, fontWeight: FontWeight.w700),
+            h2: baseStyle.copyWith(fontSize: 16, fontWeight: FontWeight.w700),
+            h3: baseStyle.copyWith(fontSize: 15, fontWeight: FontWeight.w600),
+            listBullet: baseStyle,
+            code: const TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 12.5,
+              color: Color(0xFF79C0FF),
+              backgroundColor: Color(0xFF0D1117),
+            ),
+            codeblockDecoration: BoxDecoration(
+              color: const Color(0xFF0D1117),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: cs.outlineVariant.withValues(alpha: 0.35)),
+            ),
+            codeblockPadding: const EdgeInsets.all(10),
+            blockquoteDecoration: BoxDecoration(
+              color: cs.surfaceContainerHighest.withValues(alpha: 0.45),
+              border: Border(left: BorderSide(color: cs.primary, width: 3)),
+            ),
+          ),
+        ),
       ),
     );
   }

@@ -36,12 +36,20 @@ class ToolResult {
   /// True when the user declined to run the command.
   final bool declined;
 
+  /// True when the remote command hit the client-side timeout.
+  final bool timedOut;
+
+  /// True when stdout/stderr were truncated due to max output size.
+  final bool truncated;
+
   const ToolResult({
     required this.toolCallId,
     required this.exitCode,
     required this.stdout,
     required this.stderr,
     this.declined = false,
+    this.timedOut = false,
+    this.truncated = false,
   });
 
   /// Compact text handed back to the model. We cap size so a runaway `cat`
@@ -51,9 +59,19 @@ class ToolResult {
       return 'The user declined to run this command. Do not retry it; '
           'ask for guidance or propose an alternative.';
     }
-    final buf = StringBuffer('exit_code: $exitCode\n');
+    final buf = StringBuffer();
+    if (timedOut) {
+      buf.writeln('status: timed_out');
+      buf.writeln(
+        'note: command exceeded the client timeout; output may be partial.',
+      );
+    }
+    buf.writeln('exit_code: $exitCode');
     if (stdout.isNotEmpty) buf.write('stdout:\n$stdout\n');
     if (stderr.isNotEmpty) buf.write('stderr:\n$stderr\n');
+    if (truncated) {
+      buf.writeln('note: output truncated due to size limit');
+    }
     var out = buf.toString();
     if (out.length > maxChars) {
       out = '${out.substring(0, maxChars)}\n...[truncated, output too long]';

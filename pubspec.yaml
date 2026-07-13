@@ -28,6 +28,9 @@ dependencies:
   # IDs
   uuid: ^4.5.1
 
+  # Markdown for AI assistant replies
+  flutter_markdown: ^0.7.6+2
+
   cupertino_icons: ^1.0.8
 
 dev_dependencies:

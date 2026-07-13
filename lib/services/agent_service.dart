@@ -144,6 +144,8 @@ class AgentService {
             exitCode: sshResult.exitCode,
             stdout: sshResult.stdout,
             stderr: sshResult.stderr,
+            timedOut: sshResult.timedOut,
+            truncated: sshResult.truncated,
           );
         }
 
