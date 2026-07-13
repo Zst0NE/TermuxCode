@@ -30,3 +30,20 @@ class LlmTurnResult {
   /// True when the model produced natural-language text.
   bool get hasText => text.isNotEmpty;
 }
+
+/// Incremental events from [LlmService.completeStream].
+sealed class LlmStreamEvent {
+  const LlmStreamEvent();
+}
+
+/// A UTF-8 text delta for the assistant reply.
+class LlmTextDelta extends LlmStreamEvent {
+  final String delta;
+  const LlmTextDelta(this.delta);
+}
+
+/// Stream finished; [result] is the full turn (text + tool calls).
+class LlmStreamDone extends LlmStreamEvent {
+  final LlmTurnResult result;
+  const LlmStreamDone(this.result);
+}

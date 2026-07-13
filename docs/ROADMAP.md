@@ -19,8 +19,9 @@ Aligned with product decisions: **Remote-first**, **wrap host CLIs**, success = 
 
 ## R3 — Control-plane UX
 
-- [ ] Chat/agent history persistence  
-- [ ] Streaming LLM tokens (HTTP)  
+- [x] Chat/agent history persistence  
+- [x] Streaming LLM tokens (HTTP, OpenAI SSE; Anthropic falls back)  
+- [x] Remote CLI detect/run skeleton (`/cli`, settings probe)  
 - [ ] Disconnect banner + session resume  
 - [ ] Tool timeline polish  
 

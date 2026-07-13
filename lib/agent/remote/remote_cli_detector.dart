@@ -13,31 +13,42 @@ class RemoteCliDetector {
       throw StateError('SSH not connected');
     }
 
+    // One round-trip: print path per known binary.
+    final batch = await _ssh.exec(
+      r'''
+set +e
+for c in opencode claude codex; do
+  p=$(command -v "$c" 2>/dev/null || which "$c" 2>/dev/null)
+  if [ -n "$p" ]; then
+    ver=$("$c" --version 2>/dev/null | head -n 1)
+    [ -z "$ver" ] && ver=$("$c" version 2>/dev/null | head -n 1)
+    echo "FOUND|$c|$p|${ver:-}"
+  else
+    echo "MISS|$c"
+  fi
+done
+''',
+      timeout: const Duration(seconds: 25),
+    );
+
     final out = <RemoteCliKind, String>{};
-    for (final kind in [
-      RemoteCliKind.opencode,
-      RemoteCliKind.claude,
-      RemoteCliKind.codex,
-    ]) {
-      final name = kind.cliName;
-      final result = await _ssh.exec(
-        'command -v $name 2>/dev/null || which $name 2>/dev/null; '
-        '($name --version 2>/dev/null || $name version 2>/dev/null || true) | head -n 3',
-        timeout: const Duration(seconds: 20),
-      );
-      final text = result.combinedOutput.trim();
-      if (text.isEmpty) continue;
-      // Heuristic: first non-empty line looks like a path or contains the name.
-      final lines =
-          text.split(RegExp(r'\r?\n')).map((e) => e.trim()).where((e) => e.isNotEmpty);
-      final joined = lines.join(' | ');
-      if (joined.contains('/') ||
-          joined.toLowerCase().contains(name) ||
-          result.exitCode == 0) {
-        // Ignore pure "not found" noise.
-        if (joined.toLowerCase().contains('not found')) continue;
-        out[kind] = joined.length > 300 ? '${joined.substring(0, 300)}…' : joined;
-      }
+    for (final line in batch.combinedOutput.split(RegExp(r'\r?\n'))) {
+      final t = line.trim();
+      if (!t.startsWith('FOUND|')) continue;
+      final parts = t.split('|');
+      if (parts.length < 3) continue;
+      final name = parts[1];
+      final path = parts[2];
+      final ver = parts.length > 3 ? parts.sublist(3).join('|') : '';
+      final kind = switch (name) {
+        'opencode' => RemoteCliKind.opencode,
+        'claude' => RemoteCliKind.claude,
+        'codex' => RemoteCliKind.codex,
+        _ => RemoteCliKind.unknown,
+      };
+      if (kind == RemoteCliKind.unknown) continue;
+      final summary = ver.isEmpty ? path : '$path ($ver)';
+      out[kind] = summary.length > 300 ? '${summary.substring(0, 300)}…' : summary;
     }
     return out;
   }

@@ -96,6 +96,27 @@ class LlmService {
     }
   }
 
+  /// Stream assistant text deltas, then a final [LlmStreamDone] with tool calls.
+  ///
+  /// OpenAI uses SSE (`stream: true`). Anthropic falls back to non-stream
+  /// complete and emits a single text delta for UI consistency.
+  Stream<LlmStreamEvent> completeStream({
+    required LlmProviderConfig config,
+    required String apiKey,
+    required List<ChatMessage> messages,
+    required String systemPrompt,
+  }) async* {
+    switch (config.kind) {
+      case LlmProviderKind.openai:
+        yield* _streamOpenAi(config, apiKey, messages, systemPrompt);
+      case LlmProviderKind.anthropic:
+        final turn =
+            await _completeAnthropic(config, apiKey, messages, systemPrompt);
+        if (turn.text.isNotEmpty) yield LlmTextDelta(turn.text);
+        yield LlmStreamDone(turn);
+    }
+  }
+
   /// Convert natural language into a single shell command string (no tools).
   ///
   /// Used by the terminal "magic wand". Returns only the command text, with
@@ -397,6 +418,143 @@ Rules:
       }
     }
     return result;
+  }
+
+  // ── OpenAI SSE stream ───────────────────────────────────────────────────
+
+  Stream<LlmStreamEvent> _streamOpenAi(
+    LlmProviderConfig config,
+    String apiKey,
+    List<ChatMessage> messages,
+    String systemPrompt,
+  ) async* {
+    final url = _openAiUrl(config.baseUrl);
+    final body = jsonEncode({
+      'model': config.model,
+      'temperature': config.temperature,
+      'stream': true,
+      'messages': [
+        {'role': 'system', 'content': systemPrompt},
+        ..._toOpenAiMessages(messages),
+      ],
+      'tools': [_openAiTool],
+      'tool_choice': 'auto',
+    });
+
+    final request = http.Request('POST', url)
+      ..headers.addAll({
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $apiKey',
+        'Accept': 'text/event-stream',
+      })
+      ..body = body;
+
+    final http.StreamedResponse response;
+    try {
+      response = await _http.send(request).timeout(const Duration(seconds: 90));
+    } on TimeoutException {
+      throw LlmException('请求超时（90s）: ${url.host}');
+    } catch (e) {
+      throw LlmException(
+        'Network error contacting ${url.host}: ${e.runtimeType}',
+      );
+    }
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final errBody = await response.stream.bytesToString();
+      var detail = errBody;
+      if (detail.length > 400) detail = '${detail.substring(0, 400)}…';
+      throw LlmException(
+        'HTTP ${response.statusCode} from ${url.host}: $detail',
+        statusCode: response.statusCode,
+      );
+    }
+
+    final textBuf = StringBuffer();
+    // index -> {id, name, arguments}
+    final toolAcc = <int, Map<String, String>>{};
+    String? finishReason;
+    var lineBuf = '';
+
+    await for (final chunk in response.stream.transform(utf8.decoder)) {
+      lineBuf += chunk;
+      final parts = lineBuf.split('\n');
+      lineBuf = parts.removeLast();
+      for (var line in parts) {
+        line = line.trimRight();
+        if (line.isEmpty || line.startsWith(':')) continue;
+        if (!line.startsWith('data:')) continue;
+        final data = line.substring(5).trimLeft();
+        if (data == '[DONE]') continue;
+        Map<String, dynamic> json;
+        try {
+          json = jsonDecode(data) as Map<String, dynamic>;
+        } catch (_) {
+          continue;
+        }
+        final choices = json['choices'] as List<dynamic>?;
+        if (choices == null || choices.isEmpty) continue;
+        final choice = choices[0] as Map<String, dynamic>;
+        final fr = choice['finish_reason'];
+        if (fr is String && fr.isNotEmpty) finishReason = fr;
+        final delta = choice['delta'] as Map<String, dynamic>?;
+        if (delta == null) continue;
+
+        final content = delta['content'];
+        if (content is String && content.isNotEmpty) {
+          textBuf.write(content);
+          yield LlmTextDelta(content);
+        }
+
+        final tcs = delta['tool_calls'] as List<dynamic>?;
+        if (tcs != null) {
+          for (final raw in tcs) {
+            final tc = raw as Map<String, dynamic>;
+            final idx = tc['index'] as int? ?? 0;
+            final acc = toolAcc.putIfAbsent(
+              idx,
+              () => {'id': '', 'name': '', 'arguments': ''},
+            );
+            if (tc['id'] is String) acc['id'] = tc['id'] as String;
+            final fn = tc['function'] as Map<String, dynamic>?;
+            if (fn != null) {
+              if (fn['name'] is String) acc['name'] = fn['name'] as String;
+              if (fn['arguments'] is String) {
+                acc['arguments'] =
+                    '${acc['arguments']}${fn['arguments'] as String}';
+              }
+            }
+          }
+        }
+      }
+    }
+
+    final toolCalls = <ToolCall>[];
+    final sortedKeys = toolAcc.keys.toList()..sort();
+    for (final k in sortedKeys) {
+      final acc = toolAcc[k]!;
+      Map<String, dynamic> args = {};
+      try {
+        if (acc['arguments']!.isNotEmpty) {
+          args = jsonDecode(acc['arguments']!) as Map<String, dynamic>;
+        }
+      } catch (_) {
+        args = {'command': acc['arguments']};
+      }
+      final cmd = args['command'] as String? ?? '';
+      if (cmd.isEmpty && acc['name'] != _runCommandToolName) continue;
+      toolCalls.add(ToolCall(
+        id: acc['id']!.isEmpty ? 'call_$k' : acc['id']!,
+        command: cmd.isEmpty ? acc['arguments']! : cmd,
+        rationale: args['rationale'] as String?,
+      ));
+    }
+
+    yield LlmStreamDone(LlmTurnResult(
+      text: textBuf.toString(),
+      toolCalls: toolCalls,
+      stopReason: finishReason,
+    ));
   }
 
   // ── HTTP helper ─────────────────────────────────────────────────────────

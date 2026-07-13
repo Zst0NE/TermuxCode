@@ -208,21 +208,62 @@ class ChatProvider extends ChangeNotifier {
       case AgentUserMessage(:final text):
         if (text == userText) return;
         _messages.add(ChatMessage(role: ChatRole.user, text: text));
+      case AgentAssistantDelta(:final delta):
+        // Grow the last assistant bubble while streaming; create one if needed.
+        if (_messages.isNotEmpty &&
+            _messages.last.role == ChatRole.assistant &&
+            !_messages.last.hasToolCalls) {
+          final last = _messages.last;
+          _messages[_messages.length - 1] = ChatMessage(
+            id: last.id,
+            role: ChatRole.assistant,
+            text: '${last.text}$delta',
+            toolCalls: last.toolCalls,
+            createdAt: last.createdAt,
+          );
+        } else {
+          _messages.add(ChatMessage(role: ChatRole.assistant, text: delta));
+        }
+        notifyListeners();
+        return;
       case AgentAssistantText(:final text, :final toolCalls):
-        _messages.add(ChatMessage(
-          role: ChatRole.assistant,
-          text: text,
-          toolCalls: [
-            for (final t in toolCalls)
-              ToolCall(
-                id: t.id,
-                command: (t.arguments['command'] as String?) ??
-                    (t.arguments['path'] as String?) ??
-                    t.name,
-                rationale: t.arguments['rationale'] as String?,
-              ),
-          ],
-        ));
+        // Replace trailing streamed assistant (no tools) with final message.
+        if (_messages.isNotEmpty &&
+            _messages.last.role == ChatRole.assistant &&
+            !_messages.last.hasToolCalls) {
+          final last = _messages.last;
+          _messages[_messages.length - 1] = ChatMessage(
+            id: last.id,
+            role: ChatRole.assistant,
+            text: text.isNotEmpty ? text : last.text,
+            toolCalls: [
+              for (final t in toolCalls)
+                ToolCall(
+                  id: t.id,
+                  command: (t.arguments['command'] as String?) ??
+                      (t.arguments['path'] as String?) ??
+                      t.name,
+                  rationale: t.arguments['rationale'] as String?,
+                ),
+            ],
+            createdAt: last.createdAt,
+          );
+        } else {
+          _messages.add(ChatMessage(
+            role: ChatRole.assistant,
+            text: text,
+            toolCalls: [
+              for (final t in toolCalls)
+                ToolCall(
+                  id: t.id,
+                  command: (t.arguments['command'] as String?) ??
+                      (t.arguments['path'] as String?) ??
+                      t.name,
+                  rationale: t.arguments['rationale'] as String?,
+                ),
+            ],
+          ));
+        }
       case AgentPermissionRequest():
         notifyListeners();
         return;

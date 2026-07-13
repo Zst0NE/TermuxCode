@@ -17,6 +17,12 @@ class AgentAssistantText extends AgentEvent {
   const AgentAssistantText(this.text, {this.toolCalls = const []});
 }
 
+/// Streaming token/delta for the current assistant message.
+class AgentAssistantDelta extends AgentEvent {
+  final String delta;
+  const AgentAssistantDelta(this.delta);
+}
+
 /// Permission required before a tool runs (UI should resolve via completer).
 class AgentPermissionRequest extends AgentEvent {
   final ToolCallRequest request;

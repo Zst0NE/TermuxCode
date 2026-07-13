@@ -1,5 +1,6 @@
 import '../models/chat_message.dart';
 import '../models/llm_provider_config.dart';
+import '../models/llm_turn_result.dart';
 import '../services/llm_service.dart';
 import 'agent_events.dart';
 import 'agent_mode.dart';
@@ -51,12 +52,21 @@ class AgentRuntime {
     try {
       while (steps < maxSteps) {
         steps++;
-        final turn = await llm.complete(
+        LlmTurnResult? turn;
+        await for (final ev in llm.completeStream(
           config: config,
           apiKey: apiKey,
           messages: conversation,
           systemPrompt: system,
-        );
+        )) {
+          switch (ev) {
+            case LlmTextDelta(:final delta):
+              yield AgentAssistantDelta(delta);
+            case LlmStreamDone(:final result):
+              turn = result;
+          }
+        }
+        turn ??= const LlmTurnResult();
 
         // Map LlmService run_command tool calls → shell ToolCallRequest.
         final mapped = <ToolCallRequest>[
@@ -71,6 +81,7 @@ class AgentRuntime {
             ),
         ];
 
+        // Finalize assistant message (full text + tool cards).
         yield AgentAssistantText(turn.text, toolCalls: mapped);
 
         conversation.add(ChatMessage(
