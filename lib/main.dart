@@ -11,11 +11,11 @@ import 'services/ssh_service.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const TermuxAiApp());
+  runApp(const TermuxCodeApp());
 }
 
-class TermuxAiApp extends StatelessWidget {
-  const TermuxAiApp({super.key});
+class TermuxCodeApp extends StatelessWidget {
+  const TermuxCodeApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -40,7 +40,7 @@ class TermuxAiApp extends StatelessWidget {
         ),
       ],
       child: MaterialApp(
-        title: 'Termux AI',
+        title: 'TermuxCode',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(

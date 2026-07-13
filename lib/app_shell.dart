@@ -18,7 +18,7 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   int _index = 0;
 
-  static const _titles = ['连接', '终端', 'AI', '设置'];
+  static const _titles = ['连接', '终端', 'Agent', '设置'];
 
   @override
   Widget build(BuildContext context) {

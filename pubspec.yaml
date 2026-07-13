@@ -1,5 +1,5 @@
 name: termux_ai
-description: An AI-powered mobile terminal client. Control remote hosts over SSH with natural language.
+description: TermuxCode — AI-powered mobile terminal & coding agent (SSH + local Termux roadmap).
 publish_to: "none"
 version: 0.1.0+1
 

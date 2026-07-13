@@ -2,46 +2,54 @@ import 'dart:async';
 
 import 'package:flutter/foundation.dart';
 
+import '../agent/agent.dart';
 import '../models/chat_message.dart';
-import '../services/agent_service.dart';
+import '../services/llm_service.dart';
 import '../services/secure_store.dart';
 import '../services/ssh_service.dart';
 
-/// Chat + tool-approval state for the AI screen.
+/// Chat + Agent Harness state for the AI screen.
 class ChatProvider extends ChangeNotifier {
   ChatProvider({
     required SecureStore store,
     required SshService ssh,
-    AgentService? agent,
+    LlmService? llm,
   })  : _store = store,
         _ssh = ssh,
-        _agent = agent ?? AgentService(sshService: ssh);
+        _llm = llm ?? LlmService() {
+    final stack = buildDefaultAgentStack(_ssh, mode: PermissionMode.ask);
+    _runtime = AgentRuntime(
+      llm: _llm,
+      registry: stack.registry,
+      gate: stack.gate,
+    );
+  }
 
   final SecureStore _store;
   final SshService _ssh;
-  final AgentService _agent;
+  final LlmService _llm;
+  late final AgentRuntime _runtime;
 
   final List<ChatMessage> _messages = [];
   bool _busy = false;
   String? _error;
+  AgentMode _mode = AgentMode.build;
 
-  /// Pending approval gates keyed by ToolCall.id.
-  /// AgentService's onApprove awaits these; UI resolves them via
-  /// approveToolCall / declineToolCall.
   final Map<String, Completer<bool>> _approvalWaiters = {};
-
-  /// IDs that have already been resolved (approved or declined) so that
-  /// rapid double-taps don't re-complete an already-completed Completer.
   final Set<String> _resolvedToolCalls = {};
 
   List<ChatMessage> get messages => List.unmodifiable(_messages);
   bool get isBusy => _busy;
   bool get sending => _busy;
   String? get error => _error;
+  AgentMode get mode => _mode;
 
-  /// Returns true while the agent loop is still waiting for the user to
-  /// approve or decline the given tool call id.  The UI uses this to decide
-  /// whether to show the approve/decline buttons.
+  void setMode(AgentMode mode) {
+    if (_mode == mode || _busy) return;
+    _mode = mode;
+    notifyListeners();
+  }
+
   bool isAwaitingApproval(String id) =>
       _approvalWaiters.containsKey(id) && !_resolvedToolCalls.contains(id);
 
@@ -66,77 +74,109 @@ class ChatProvider extends ChangeNotifier {
         return;
       }
 
+      if (_mode != AgentMode.chat && !_ssh.isConnected) {
+        _messages.add(ChatMessage(
+          role: ChatRole.assistant,
+          text: '当前模式为 ${_mode.label}，需要先连接 SSH 主机（或切换到 Chat 纯对话）。',
+        ));
+        return;
+      }
+
       try {
-        await for (final msg in _agent.run(
+        await for (final event in _runtime.run(
           userText: text.trim(),
+          mode: _mode,
           config: cfg,
           apiKey: key,
           history: [
             for (final m in _messages)
               if (m.id != userMsg.id) m,
           ],
-          onApprove: (call) async {
-            // Create a Completer for this tool call and wait.
-            // approveToolCall / declineToolCall resolve it from the UI.
+          onApprove: (req) async {
             final completer = Completer<bool>();
-            _approvalWaiters[call.id] = completer;
-            // Notify the UI so it can show the approve/decline buttons
-            // (the assistant message with toolCalls has already been added
-            //  to _messages by the stream loop below when we reach here).
+            _approvalWaiters[req.id] = completer;
             notifyListeners();
             return completer.future;
           },
         )) {
-          // Skip duplicate user message that AgentService re-emits.
-          if (msg.role == ChatRole.user && msg.text == userMsg.text) continue;
-
-          // AgentService already yields declined tool results; add them
-          // so the user sees the "已拒绝" chip.  No need to filter them out.
-          _messages.add(msg);
-          notifyListeners();
+          _handleEvent(event, userMsg.text);
         }
       } catch (e) {
         _messages.add(ChatMessage(
           role: ChatRole.assistant,
-          text:
-              'AI 暂时不可用：$e\n\n演示模式：我可以帮你在已连接的主机上执行命令。例如发送包含 "ls" 的消息会弹出待批准命令。',
-          toolCalls: text.toLowerCase().contains('ls')
-              ? const [
-                  ToolCall(
-                    id: 'demo-ls',
-                    command: 'ls -la ~',
-                    rationale: '列出主目录',
-                  ),
-                ]
-              : const [],
+          text: 'Agent 运行失败：$e',
         ));
+        _error = '$e';
       }
     } finally {
       _busy = false;
-      // Cancel any waiters that never got resolved (e.g. stream error).
       _cancelPendingWaiters();
       notifyListeners();
     }
   }
 
-  /// Called by the UI when the user taps 批准.
-  /// Resolves the Completer so AgentService proceeds to execute the command
-  /// and yield the tool-result message back into the stream.
+  void _handleEvent(AgentEvent event, String userText) {
+    switch (event) {
+      case AgentUserMessage(:final text):
+        if (text == userText) return;
+        _messages.add(ChatMessage(role: ChatRole.user, text: text));
+      case AgentAssistantText(:final text, :final toolCalls):
+        _messages.add(ChatMessage(
+          role: ChatRole.assistant,
+          text: text,
+          toolCalls: [
+            for (final t in toolCalls)
+              ToolCall(
+                id: t.id,
+                command: (t.arguments['command'] as String?) ??
+                    (t.arguments['path'] as String?) ??
+                    t.name,
+                rationale: t.arguments['rationale'] as String?,
+              ),
+          ],
+        ));
+      case AgentPermissionRequest():
+        // Buttons appear via isAwaitingApproval; assistant tool cards already shown.
+        notifyListeners();
+        return;
+      case AgentToolFinished(:final result):
+        _messages.add(ChatMessage(
+          role: ChatRole.tool,
+          toolResult: ToolResult(
+            toolCallId: result.toolCallId,
+            exitCode: result.isError ? 1 : 0,
+            stdout: result.isError ? '' : result.content,
+            stderr: result.isError ? result.content : '',
+            declined: result.content.contains('declined') ||
+                result.content.contains('denied'),
+            timedOut: result.timedOut,
+            truncated: result.truncated,
+          ),
+        ));
+      case AgentTurnDone():
+        return;
+      case AgentTurnError(:final message):
+        _messages.add(ChatMessage(
+          role: ChatRole.assistant,
+          text: '错误：$message',
+        ));
+        _error = message;
+      case AgentModeInfo():
+        return;
+    }
+    notifyListeners();
+  }
+
   Future<void> approveToolCall(ToolCall call) async {
-    if (!_ssh.isConnected) {
+    if (!_ssh.isConnected && _mode != AgentMode.chat) {
       _error = '请先连接 SSH 主机';
       notifyListeners();
-      // Decline so the agent loop can continue rather than hanging forever.
       _resolveWaiter(call.id, false);
       return;
     }
     _resolveWaiter(call.id, true);
   }
 
-  /// Called by the UI when the user taps 拒绝.
-  /// Resolves the Completer with false; AgentService will yield a declined
-  /// ToolResult and the stream loop will add it to _messages — no need to
-  /// write an extra message here.
   void declineToolCall(ToolCall call) {
     _resolveWaiter(call.id, false);
   }
@@ -156,15 +196,12 @@ class ChatProvider extends ChangeNotifier {
   @override
   void dispose() {
     _cancelPendingWaiters();
+    _llm.dispose();
     super.dispose();
   }
 
-  // ---------------------------------------------------------------------------
-  // Internals
-  // ---------------------------------------------------------------------------
-
   void _resolveWaiter(String id, bool approved) {
-    if (_resolvedToolCalls.contains(id)) return; // guard rapid double-tap
+    if (_resolvedToolCalls.contains(id)) return;
     final c = _approvalWaiters.remove(id);
     if (c != null && !c.isCompleted) {
       _resolvedToolCalls.add(id);

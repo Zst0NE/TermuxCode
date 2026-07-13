@@ -126,7 +126,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         children: [
                           Icon(Icons.terminal, color: cs.primary),
                           const SizedBox(width: 8),
-                          Text('Termux AI', style: Theme.of(context).textTheme.titleMedium),
+                          Text('TermuxCode', style: Theme.of(context).textTheme.titleMedium),
                         ],
                       ),
                       const SizedBox(height: 4),

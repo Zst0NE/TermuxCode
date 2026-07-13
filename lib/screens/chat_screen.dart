@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../agent/agent_mode.dart';
+import '../models/chat_message.dart';
 import '../providers/chat_provider.dart';
 import '../providers/session_provider.dart';
 import '../providers/settings_provider.dart';
-import '../models/chat_message.dart';
 import '../widgets/message_bubble.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -46,28 +47,45 @@ class _ChatScreenState extends State<ChatScreen> {
 
     if (chat.messages.isNotEmpty) _scrollToBottom();
 
+    final needsSsh = chat.mode != AgentMode.chat;
     final canSend = !chat.isBusy &&
-        session.isConnected &&
-        settings.isConfigured;
+        settings.isConfigured &&
+        (!needsSsh || session.isConnected);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('AI 助手'),
+        title: const Text('TermuxCode'),
         actions: [
           if (chat.messages.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.delete_sweep_outlined),
               tooltip: '清空对话',
-              onPressed: () => chat.clearMessages(),
+              onPressed: chat.isBusy ? null : () => chat.clearMessages(),
             ),
         ],
       ),
       body: Column(
         children: [
-          if (!session.isConnected)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+            child: SegmentedButton<AgentMode>(
+              segments: [
+                for (final m in AgentMode.values)
+                  ButtonSegment(
+                    value: m,
+                    label: Text(m.label),
+                    tooltip: m.descriptionZh,
+                  ),
+              ],
+              selected: {chat.mode},
+              onSelectionChanged:
+                  chat.isBusy ? null : (s) => chat.setMode(s.first),
+            ),
+          ),
+          if (needsSsh && !session.isConnected)
             _Banner(
               icon: Icons.link_off,
-              message: '未连接 SSH，AI 无法执行命令',
+              message: '未连接 SSH — Plan/Build 需要主机（Chat 可纯对话）',
               color: cs.errorContainer,
               textColor: cs.onErrorContainer,
             ),
@@ -80,7 +98,7 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
           Expanded(
             child: chat.messages.isEmpty
-                ? _EmptyChat(cs: cs)
+                ? _EmptyChat(cs: cs, mode: chat.mode)
                 : ListView.builder(
                     controller: _scrollCtrl,
                     padding: const EdgeInsets.all(12),
@@ -132,8 +150,9 @@ class _ChatScreenState extends State<ChatScreen> {
 }
 
 class _EmptyChat extends StatelessWidget {
-  const _EmptyChat({required this.cs});
+  const _EmptyChat({required this.cs, required this.mode});
   final ColorScheme cs;
+  final AgentMode mode;
 
   @override
   Widget build(BuildContext context) {
@@ -146,13 +165,16 @@ class _EmptyChat extends StatelessWidget {
             Icon(Icons.smart_toy_outlined, size: 72, color: cs.outline),
             const SizedBox(height: 16),
             Text(
-              '和 AI 对话来管理远程主机',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(color: cs.onSurfaceVariant),
+              'TermuxCode Agent',
+              style: Theme.of(context)
+                  .textTheme
+                  .titleMedium
+                  ?.copyWith(color: cs.onSurfaceVariant),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
             Text(
-              '先连接 SSH 主机并配置 API Key，\n然后输入你想做的事',
+              '${mode.label}：${mode.descriptionZh}\nChat / Plan / Build 可在上方切换',
               style: TextStyle(color: cs.outline, fontSize: 13),
               textAlign: TextAlign.center,
             ),
@@ -185,7 +207,10 @@ class _Banner extends StatelessWidget {
         children: [
           Icon(icon, size: 16, color: textColor),
           const SizedBox(width: 8),
-          Text(message, style: TextStyle(color: textColor, fontSize: 13)),
+          Expanded(
+            child:
+                Text(message, style: TextStyle(color: textColor, fontSize: 13)),
+          ),
         ],
       ),
     );
@@ -207,12 +232,16 @@ class _InputBar extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     return Container(
       padding: EdgeInsets.only(
-        left: 12, right: 8, top: 8,
+        left: 12,
+        right: 8,
+        top: 8,
         bottom: MediaQuery.viewInsetsOf(context).bottom + 8,
       ),
       decoration: BoxDecoration(
         color: cs.surfaceContainerHigh,
-        border: Border(top: BorderSide(color: cs.outlineVariant.withOpacity(0.3))),
+        border: Border(
+          top: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.3)),
+        ),
       ),
       child: Row(
         children: [
@@ -224,14 +253,15 @@ class _InputBar extends StatelessWidget {
               textInputAction: TextInputAction.send,
               onSubmitted: canSend ? (_) => onSend() : null,
               decoration: InputDecoration(
-                hintText: '输入指令，例如：列出磁盘使用情况',
+                hintText: '描述任务，例如：查看磁盘占用并给出建议',
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(24),
                   borderSide: BorderSide.none,
                 ),
                 filled: true,
                 fillColor: cs.surfaceContainerHighest,
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               ),
             ),
           ),
@@ -240,7 +270,8 @@ class _InputBar extends StatelessWidget {
             onPressed: canSend ? onSend : null,
             icon: const Icon(Icons.send),
             style: IconButton.styleFrom(
-              backgroundColor: canSend ? cs.primary : cs.surfaceContainerHighest,
+              backgroundColor:
+                  canSend ? cs.primary : cs.surfaceContainerHighest,
               foregroundColor: canSend ? cs.onPrimary : cs.outline,
             ),
           ),
