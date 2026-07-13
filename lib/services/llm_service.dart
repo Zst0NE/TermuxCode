@@ -96,6 +96,62 @@ class LlmService {
     }
   }
 
+  /// Convert natural language into a single shell command string (no tools).
+  ///
+  /// Used by the terminal "magic wand". Returns only the command text, with
+  /// markdown fences stripped. Never executes anything.
+  Future<String> suggestShellCommand({
+    required LlmProviderConfig config,
+    required String apiKey,
+    required String naturalLanguage,
+  }) async {
+    const system = '''
+You convert natural language into exactly ONE shell command for a remote Linux host.
+Rules:
+- Output ONLY the command, no explanation, no markdown fences, no quotes around the whole command.
+- Prefer safe, non-destructive commands unless the user clearly asks for destruction.
+- Assume a standard bash/sh environment (Termux or Linux server).
+''';
+
+    final turn = await complete(
+      config: config,
+      apiKey: apiKey,
+      messages: [
+        ChatMessage(role: ChatRole.user, text: naturalLanguage.trim()),
+      ],
+      systemPrompt: system,
+    );
+
+    // Prefer plain text; if the model still emitted a tool call, take its command.
+    var cmd = turn.text.trim();
+    if (cmd.isEmpty && turn.toolCalls.isNotEmpty) {
+      cmd = turn.toolCalls.first.command.trim();
+    }
+    cmd = _stripCodeFence(cmd);
+    if (cmd.isEmpty) {
+      throw const LlmException('模型未返回可用命令');
+    }
+    // Only keep the first line if the model was chatty.
+    final firstLine = cmd.split(RegExp(r'\r?\n')).first.trim();
+    return firstLine;
+  }
+
+  static String _stripCodeFence(String s) {
+    var t = s.trim();
+    if (t.startsWith('```')) {
+      final lines = t.split(RegExp(r'\r?\n'));
+      if (lines.length >= 3 && lines.last.trim().startsWith('```')) {
+        t = lines.sublist(1, lines.length - 1).join('\n').trim();
+      } else {
+        t = t.replaceAll(RegExp(r'^```[a-zA-Z0-9]*\n?'), '').replaceAll('```', '').trim();
+      }
+    }
+    if ((t.startsWith('`') && t.endsWith('`')) && t.length > 1) {
+      t = t.substring(1, t.length - 1).trim();
+    }
+    return t;
+  }
+
   // ── OpenAI ──────────────────────────────────────────────────────────────
 
   Future<LlmTurnResult> _completeOpenAi(
