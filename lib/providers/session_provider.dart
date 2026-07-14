@@ -15,6 +15,9 @@ class SessionProvider extends ChangeNotifier {
   final SshService _ssh;
 
   SshProfile? _activeProfile;
+  // Last successfully attempted profile; kept after disconnect/error so the UI
+  // can offer a one-tap "重新连接" without the user navigating to the profile list.
+  SshProfile? _lastProfile;
   SshShellSession? _shell;
   Terminal? _terminal;
   SshConnectionState _state = SshConnectionState.disconnected;
@@ -24,6 +27,9 @@ class SessionProvider extends ChangeNotifier {
   SshProfile? get activeProfile => _activeProfile;
   String? get activeProfileId => _activeProfile?.id;
   String? get activeProfileLabel => _activeProfile?.label;
+  /// The last profile that was (or attempted to be) connected.
+  /// Persists across disconnects and errors so reconnect is always available.
+  SshProfile? get lastProfile => _lastProfile;
   SshShellSession? get shellSession => _shell;
   SshConnectionState get state => _state;
   bool get isConnected => _state == SshConnectionState.connected;
@@ -56,6 +62,7 @@ class SessionProvider extends ChangeNotifier {
     _error = null;
     _state = SshConnectionState.connecting;
     _activeProfile = profile;
+    _lastProfile = profile;
     notifyListeners();
 
     try {
@@ -86,6 +93,33 @@ class SessionProvider extends ChangeNotifier {
       notifyListeners();
       rethrow;
     }
+  }
+
+  /// One-tap reconnect using [lastProfile]. Host-key prompts optional.
+  Future<void> reconnect({
+    Future<bool> Function(
+      String host,
+      int port,
+      String keyType,
+      String fingerprintDisplay,
+    )? onUnknownHostKey,
+    Future<bool> Function(
+      String host,
+      int port,
+      String keyType,
+      String fingerprintDisplay,
+      String previousFingerprint,
+    )? onHostKeyMismatch,
+  }) async {
+    final profile = _lastProfile;
+    if (profile == null) {
+      throw StateError('没有可重连的主机配置');
+    }
+    await connect(
+      profile,
+      onUnknownHostKey: onUnknownHostKey,
+      onHostKeyMismatch: onHostKeyMismatch,
+    );
   }
 
   /// Open (or re-open) an interactive shell on the current connection.

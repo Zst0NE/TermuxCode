@@ -2,28 +2,31 @@
 
 Aligned with product decisions: **Remote-first**, **wrap host CLIs**, success = open-source traction.
 
-## R1 — Story & demo (docs) ✅ in progress
+## R1 — Story & demo (docs)
 
-- [x] Public repo + v0.1.0 APK  
+- [x] Public repo + v0.1.0 / v0.1.1 APK  
 - [x] Rebrand TermuxCode  
-- [ ] README remote-first narrative  
-- [ ] Competitors + roadmap docs  
+- [x] README remote-first narrative  
+- [x] Competitors + roadmap docs  
 - [ ] Short demo script / GIF (community)
 
 ## R2 — Remote CLI adapters
 
-- [ ] Detect `opencode` / `claude` / `codex` on SSH host  
-- [ ] Non-interactive prompt runner with safe quoting  
-- [ ] Stream stdout into Agent UI  
-- [ ] Deep-support **one** CLI first (prefer OpenCode)
+- [x] Detect `opencode` / `claude` / `codex` on SSH host  
+- [x] Non-interactive prompt runner with safe quoting  
+- [x] Surface CLI output in Agent UI (`/cli`)  
+- [ ] Deep-support **one** CLI first (prefer OpenCode) — flags/productize
 
 ## R3 — Control-plane UX
 
 - [x] Chat/agent history persistence  
 - [x] Streaming LLM tokens (HTTP, OpenAI SSE; Anthropic falls back)  
 - [x] Remote CLI detect/run skeleton (`/cli`, settings probe)  
-- [ ] Disconnect banner + session resume  
-- [ ] Tool timeline polish  
+- [x] Auto-fetch model list + searchable filter chips  
+- [x] Tool result timeline (status chips, collapsible output)  
+- [x] Session reconnect (`lastProfile` + top strip / terminal CTA)  
+- [ ] Disconnect auto-detect while idle (keep-alive)  
+- [ ] Tool timeline polish (timestamps / duration)
 
 ## R4 — Local Termux as host
 

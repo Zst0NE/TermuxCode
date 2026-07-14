@@ -96,6 +96,27 @@ class _AppShellState extends State<AppShell> {
                         ),
                         child: const Text('断开'),
                       )
+                    else if (!connecting && session.lastProfile != null)
+                      TextButton(
+                        onPressed: () async {
+                          try {
+                            await session.reconnect();
+                          } catch (e) {
+                            if (!context.mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('重连失败：$e'),
+                                backgroundColor: Colors.red[800],
+                              ),
+                            );
+                          }
+                        },
+                        style: TextButton.styleFrom(
+                          foregroundColor: const Color(0xFF00E5A0),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        child: Text('重连 ${session.lastProfile!.label}'),
+                      )
                     else if (!connecting)
                       TextButton(
                         onPressed: () => setState(() => _index = 0),

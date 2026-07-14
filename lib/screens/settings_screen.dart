@@ -15,17 +15,49 @@ class SettingsScreen extends StatefulWidget {
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
+enum _ModelFilter { all, chat, other }
+
 class _SettingsScreenState extends State<SettingsScreen> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _baseUrl;
   late final TextEditingController _model;
   late final TextEditingController _apiKey;
+  late final TextEditingController _modelSearch;
   LlmProviderKind _kind = LlmProviderKind.openai;
   bool _obscureKey = true;
   bool _saving = false;
   bool _fetchingModels = false;
   List<String> _modelIds = [];
   String? _modelsError;
+  _ModelFilter _modelFilter = _ModelFilter.all;
+
+  static bool _isChatModel(String id) {
+    final l = id.toLowerCase();
+    return !l.contains('embed') &&
+        !l.contains('whisper') &&
+        !l.contains('tts') &&
+        !l.contains('dall-e') &&
+        !l.contains('moderation') &&
+        !l.contains('embedding');
+  }
+
+  List<String> get _filteredModelIds {
+    var list = _modelIds.where((id) {
+      switch (_modelFilter) {
+        case _ModelFilter.all:
+          return true;
+        case _ModelFilter.chat:
+          return _isChatModel(id);
+        case _ModelFilter.other:
+          return !_isChatModel(id);
+      }
+    }).toList();
+    final q = _modelSearch.text.trim().toLowerCase();
+    if (q.isNotEmpty) {
+      list = list.where((id) => id.toLowerCase().contains(q)).toList();
+    }
+    return list;
+  }
 
   @override
   void initState() {
@@ -34,7 +66,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _baseUrl = TextEditingController(text: s.config.baseUrl);
     _model = TextEditingController(text: s.config.model);
     _apiKey = TextEditingController(text: s.maskedApiKey);
+    _modelSearch = TextEditingController();
     _kind = s.config.kind;
+    _modelSearch.addListener(() => setState(() {}));
   }
 
   @override
@@ -42,6 +76,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _baseUrl.dispose();
     _model.dispose();
     _apiKey.dispose();
+    _modelSearch.dispose();
     super.dispose();
   }
 
@@ -268,41 +303,117 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ],
               if (_modelIds.isNotEmpty) ...[
+                const SizedBox(height: 12),
+                // ── Search field ──────────────────────────────────────────
+                TextField(
+                  controller: _modelSearch,
+                  decoration: InputDecoration(
+                    labelText: '搜索模型',
+                    hintText: '关键词过滤…',
+                    prefixIcon: const Icon(Icons.search, size: 20),
+                    suffixIcon: _modelSearch.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear, size: 18),
+                            onPressed: () {
+                              _modelSearch.clear();
+                            },
+                          )
+                        : null,
+                    isDense: true,
+                    border: const OutlineInputBorder(),
+                  ),
+                ),
                 const SizedBox(height: 8),
-                InputDecorator(
-                  decoration: const InputDecoration(
-                    labelText: '从列表选择',
-                    border: OutlineInputBorder(),
-                    contentPadding:
-                        EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                  ),
-                  child: DropdownButtonHideUnderline(
-                    child: DropdownButton<String>(
-                      isExpanded: true,
-                      value: _modelIds.contains(_model.text.trim())
-                          ? _model.text.trim()
-                          : null,
-                      hint: const Text('选择模型…'),
-                      items: [
-                        for (final id in _modelIds)
-                          DropdownMenuItem(
-                            value: id,
-                            child: Text(
-                              id,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                fontFamily: 'monospace',
-                                fontSize: 13,
-                              ),
-                            ),
-                          ),
-                      ],
-                      onChanged: (v) {
-                        if (v == null) return;
-                        setState(() => _model.text = v);
-                      },
+                // ── Filter chips ──────────────────────────────────────────
+                Row(
+                  children: [
+                    for (final f in _ModelFilter.values)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: FilterChip(
+                          label: Text(switch (f) {
+                            _ModelFilter.all => '全部',
+                            _ModelFilter.chat => '对话',
+                            _ModelFilter.other => '其他',
+                          }),
+                          selected: _modelFilter == f,
+                          onSelected: (_) =>
+                              setState(() => _modelFilter = f),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                    const Spacer(),
+                    // ── Count label ───────────────────────────────────────
+                    Text(
+                      '显示 ${_filteredModelIds.length} / ${_modelIds.length}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
                     ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                // ── Scrollable model list ─────────────────────────────────
+                Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(
+                      color: Theme.of(context).colorScheme.outlineVariant,
+                    ),
+                    borderRadius: BorderRadius.circular(8),
                   ),
+                  constraints: const BoxConstraints(maxHeight: 240),
+                  child: _filteredModelIds.isEmpty
+                      ? const Padding(
+                          padding: EdgeInsets.all(16),
+                          child: Center(child: Text('无匹配模型')),
+                        )
+                      : ListView.builder(
+                          shrinkWrap: true,
+                          itemCount: _filteredModelIds.length,
+                          itemBuilder: (ctx, i) {
+                            final id = _filteredModelIds[i];
+                            final selected = _model.text.trim() == id;
+                            return InkWell(
+                              onTap: () => setState(() => _model.text = id),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                  vertical: 10,
+                                ),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        id,
+                                        style: TextStyle(
+                                          fontFamily: 'monospace',
+                                          fontSize: 13,
+                                          fontWeight: selected
+                                              ? FontWeight.w600
+                                              : FontWeight.normal,
+                                          color: selected
+                                              ? Theme.of(context)
+                                                  .colorScheme
+                                                  .primary
+                                              : null,
+                                        ),
+                                      ),
+                                    ),
+                                    if (selected)
+                                      Icon(
+                                        Icons.check,
+                                        size: 16,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primary,
+                                      ),
+                                  ],
+                                ),
+                              ),
+                            );
+                          },
+                        ),
                 ),
               ],
               const SizedBox(height: 24),

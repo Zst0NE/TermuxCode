@@ -52,6 +52,8 @@ class _TerminalScreenState extends State<TerminalScreen> {
     final cs = Theme.of(context).colorScheme;
 
     if (session.state != SshConnectionState.connected) {
+      final last = session.lastProfile;
+      final canReconnect = last != null && !session.isConnecting;
       return Scaffold(
         appBar: AppBar(title: const Text('终端')),
         body: Center(
@@ -63,7 +65,11 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 Icon(Icons.terminal, size: 72, color: cs.outline),
                 const SizedBox(height: 16),
                 Text(
-                  '未连接',
+                  session.isConnecting
+                      ? '正在连接…'
+                      : session.state == SshConnectionState.error
+                          ? '连接异常'
+                          : '未连接',
                   style: Theme.of(context)
                       .textTheme
                       .titleMedium
@@ -71,10 +77,32 @@ class _TerminalScreenState extends State<TerminalScreen> {
                 ),
                 const SizedBox(height: 8),
                 Text(
-                  '请先在「连接」页面连接到 SSH 主机',
+                  last != null
+                      ? '上次主机：${last.label}（${last.username}@${last.host}）'
+                      : '请先在「连接」页面连接到 SSH 主机',
                   style: TextStyle(color: cs.outline, fontSize: 13),
                   textAlign: TextAlign.center,
                 ),
+                if (canReconnect) ...[
+                  const SizedBox(height: 20),
+                  FilledButton.icon(
+                    onPressed: () async {
+                      try {
+                        await session.reconnect();
+                      } catch (e) {
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('重连失败：$e'),
+                            backgroundColor: Colors.red[800],
+                          ),
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.refresh),
+                    label: Text('重新连接 ${last.label}'),
+                  ),
+                ],
               ],
             ),
           ),
