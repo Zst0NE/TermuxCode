@@ -117,6 +117,94 @@ class LlmService {
     }
   }
 
+  /// List model IDs from the provider (OpenAI-compatible `GET /models`,
+  /// Anthropic `GET /v1/models`). Sorted, de-duplicated. Never logs [apiKey].
+  Future<List<String>> listModels({
+    required LlmProviderConfig config,
+    required String apiKey,
+  }) async {
+    final key = apiKey.trim();
+    if (key.isEmpty) {
+      throw const LlmException('API Key 为空，无法拉取模型列表');
+    }
+    switch (config.kind) {
+      case LlmProviderKind.openai:
+        return _listOpenAiModels(config.baseUrl, key);
+      case LlmProviderKind.anthropic:
+        return _listAnthropicModels(config.baseUrl, key);
+    }
+  }
+
+  Future<List<String>> _listOpenAiModels(String baseUrl, String apiKey) async {
+    final url = _openAiModelsUrl(baseUrl);
+    final body = await _get(
+      url: url,
+      headers: {
+        'Authorization': 'Bearer $apiKey',
+        'Content-Type': 'application/json',
+      },
+    );
+    final json = jsonDecode(body);
+    final ids = <String>{};
+    if (json is Map<String, dynamic>) {
+      final data = json['data'];
+      if (data is List) {
+        for (final item in data) {
+          if (item is Map && item['id'] is String) {
+            ids.add(item['id'] as String);
+          }
+        }
+      }
+    } else if (json is List) {
+      // Some proxies return a bare list.
+      for (final item in json) {
+        if (item is Map && item['id'] is String) {
+          ids.add(item['id'] as String);
+        } else if (item is String) {
+          ids.add(item);
+        }
+      }
+    }
+    if (ids.isEmpty) {
+      throw const LlmException('模型列表为空或响应格式无法解析');
+    }
+    final list = ids.toList()..sort();
+    return list;
+  }
+
+  Future<List<String>> _listAnthropicModels(String baseUrl, String apiKey) async {
+    final url = _anthropicModelsUrl(baseUrl);
+    final body = await _get(
+      url: url,
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+    );
+    final json = jsonDecode(body);
+    final ids = <String>{};
+    if (json is Map<String, dynamic>) {
+      final data = json['data'];
+      if (data is List) {
+        for (final item in data) {
+          if (item is Map) {
+            final id = item['id'] ?? item['name'];
+            if (id is String && id.isNotEmpty) ids.add(id);
+          }
+        }
+      }
+    }
+    if (ids.isEmpty) {
+      // Older gateways may not support /models — surface a clear error.
+      throw const LlmException(
+        'Anthropic 模型列表为空（端点可能不支持 GET /v1/models，请手动填写）',
+      );
+    }
+    final list = ids.toList()..sort();
+    return list;
+  }
+
   /// Convert natural language into a single shell command string (no tools).
   ///
   /// Used by the terminal "magic wand". Returns only the command text, with
@@ -243,6 +331,32 @@ Rules:
       return Uri.parse(trimmed);
     }
     return Uri.parse('$trimmed/chat/completions');
+  }
+
+  /// `GET {base}/models` for OpenAI-compatible providers (incl. DeepSeek, etc.).
+  Uri _openAiModelsUrl(String baseUrl) {
+    var trimmed = baseUrl.trimRight().replaceAll(RegExp(r'/$'), '');
+    if (trimmed.endsWith('/chat/completions')) {
+      trimmed = trimmed.substring(
+        0,
+        trimmed.length - '/chat/completions'.length,
+      );
+      trimmed = trimmed.replaceAll(RegExp(r'/$'), '');
+    }
+    if (trimmed.endsWith('/models')) return Uri.parse(trimmed);
+    return Uri.parse('$trimmed/models');
+  }
+
+  /// `GET {base}/v1/models` for Anthropic (or base already ending in /models).
+  Uri _anthropicModelsUrl(String baseUrl) {
+    final trimmed = baseUrl.trimRight().replaceAll(RegExp(r'/$'), '');
+    if (trimmed.contains('/v1/models')) return Uri.parse(trimmed);
+    if (trimmed.endsWith('/models')) return Uri.parse(trimmed);
+    if (trimmed.endsWith('/v1')) return Uri.parse('$trimmed/models');
+    if (trimmed.contains('/v1/messages')) {
+      return Uri.parse(trimmed.replaceFirst('/v1/messages', '/v1/models'));
+    }
+    return Uri.parse('$trimmed/v1/models');
   }
 
   List<Map<String, dynamic>> _toOpenAiMessages(List<ChatMessage> messages) {
@@ -559,6 +673,24 @@ Rules:
 
   // ── HTTP helper ─────────────────────────────────────────────────────────
 
+  Future<String> _get({
+    required Uri url,
+    required Map<String, String> headers,
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    final http.Response response;
+    try {
+      response = await _http.get(url, headers: headers).timeout(timeout);
+    } on TimeoutException {
+      throw LlmException('请求超时（${timeout.inSeconds}s）: ${url.host}');
+    } catch (e) {
+      throw LlmException(
+        'Network error contacting ${url.host}: ${e.runtimeType}',
+      );
+    }
+    return _ensureOk(response, url);
+  }
+
   Future<String> _post({
     required Uri url,
     required Map<String, String> headers,
@@ -575,7 +707,10 @@ Rules:
     } catch (e) {
       throw LlmException('Network error contacting ${url.host}: ${e.runtimeType}');
     }
+    return _ensureOk(response, url);
+  }
 
+  String _ensureOk(http.Response response, Uri url) {
     if (response.statusCode < 200 || response.statusCode >= 300) {
       // Extract provider error message without echoing auth headers.
       String detail;
@@ -597,7 +732,6 @@ Rules:
         statusCode: response.statusCode,
       );
     }
-
     return response.body;
   }
 
