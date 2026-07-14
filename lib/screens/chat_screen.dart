@@ -7,6 +7,7 @@ import '../providers/chat_provider.dart';
 import '../providers/session_provider.dart';
 import '../providers/settings_provider.dart';
 import '../widgets/message_bubble.dart';
+import '../widgets/remote_cli_bar.dart';
 
 class ChatScreen extends StatefulWidget {
   const ChatScreen({super.key});
@@ -48,9 +49,10 @@ class _ChatScreenState extends State<ChatScreen> {
     if (chat.messages.isNotEmpty) _scrollToBottom();
 
     final needsSsh = chat.mode != AgentMode.chat;
+    // Built-in agent needs API key; /cli path only needs SSH (handled in onSend).
     final canSend = !chat.isBusy &&
-        settings.isConfigured &&
-        (!needsSsh || session.isConnected);
+        (session.isConnected ||
+            (settings.isConfigured && chat.mode == AgentMode.chat));
 
     return Scaffold(
       appBar: AppBar(
@@ -111,10 +113,11 @@ class _ChatScreenState extends State<ChatScreen> {
           if (!settings.isConfigured)
             _Banner(
               icon: Icons.key_off_outlined,
-              message: '未配置 API Key，请前往设置',
+              message: '未配置 API Key，请前往设置（内置 Agent 需要；/cli 仅需 SSH）',
               color: cs.tertiaryContainer,
               textColor: cs.onTertiaryContainer,
             ),
+          const RemoteCliBar(),
           Expanded(
             child: chat.messages.isEmpty
                 ? _EmptyChat(cs: cs, mode: chat.mode)
@@ -159,26 +162,41 @@ class _ChatScreenState extends State<ChatScreen> {
               final text = _inputCtrl.text.trim();
               if (text.isEmpty) return;
               _inputCtrl.clear();
-              // Prefix: /cli ... → host OpenCode/Claude/Codex adapter
-              if (text.startsWith('/cli ')) {
-                chat.runRemoteCli(text.substring(5));
-              } else if (text == '/cli') {
-                chat.remoteCli.detect().then((_) {
-                  if (!context.mounted) return;
-                  final avail = chat.remoteCli.available;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        avail.isEmpty
-                            ? '未检测到远端 CLI'
-                            : '可用: ${avail.keys.map((k) => k.label).join(", ")}',
+              // /cli ... → host OpenCode/Claude/Codex (no local API key required)
+              if (text == '/cli' || text.startsWith('/cli ')) {
+                if (text == '/cli') {
+                  chat.remoteCli.detect().then((_) {
+                    if (!context.mounted) return;
+                    final avail = chat.remoteCli.available;
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          avail.isEmpty
+                              ? '未检测到远端 CLI'
+                              : '可用: ${avail.keys.map((k) => k.label).join(", ")}'
+                                  '${chat.remoteCli.selected != null ? " · 当前 ${chat.remoteCli.selected!.label}" : ""}',
+                        ),
                       ),
-                    ),
-                  );
-                });
-              } else {
-                chat.sendMessage(text);
+                    );
+                  });
+                } else {
+                  chat.runRemoteCli(text.substring(5));
+                }
+                return;
               }
+              if (!settings.isConfigured) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('内置 Agent 需要 API Key，或改用 /cli 调远端 CLI')),
+                );
+                return;
+              }
+              if (needsSsh && !session.isConnected) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Plan/Build 需要先连接 SSH')),
+                );
+                return;
+              }
+              chat.sendMessage(text);
             },
           ),
         ],
@@ -212,7 +230,9 @@ class _EmptyChat extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              '${mode.label}：${mode.descriptionZh}\nChat / Plan / Build 可在上方切换',
+              '${mode.label}：${mode.descriptionZh}\n'
+              'Chat / Plan / Build 可在上方切换\n'
+              '远端 CLI：点雷达探测，或 /cli 你的任务',
               style: TextStyle(color: cs.outline, fontSize: 13),
               textAlign: TextAlign.center,
             ),

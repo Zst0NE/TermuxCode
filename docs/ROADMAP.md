@@ -8,14 +8,14 @@ Aligned with product decisions: **Remote-first**, **wrap host CLIs**, success = 
 - [x] Rebrand TermuxCode  
 - [x] README remote-first narrative  
 - [x] Competitors + roadmap docs  
-- [ ] Short demo script / GIF (community)
+- [x] Short demo script / GIF (community) — docs/DEMO.md script ready; GIF still welcome
 
 ## R2 — Remote CLI adapters
 
 - [x] Detect `opencode` / `claude` / `codex` on SSH host  
 - [x] Non-interactive prompt runner with safe quoting  
 - [x] Surface CLI output in Agent UI (`/cli`)  
-- [ ] Deep-support **one** CLI first (prefer OpenCode) — flags/productize
+- [x] Deep-support **one** CLI first (prefer OpenCode) — improved detect + single-quote + run/exec/-p ladder
 
 ## R3 — Control-plane UX
 
