@@ -153,6 +153,8 @@ class SshService {
         username: profile.username,
         onPasswordRequest: onPasswordRequest,
         identities: identities ?? [],
+        // Keep NAT/firewall mappings warm on mobile networks.
+        keepAliveInterval: const Duration(seconds: 15),
         onVerifyHostKey: (keyType, fpBytes) async {
           try {
             final fp = _formatFingerprint(fpBytes);

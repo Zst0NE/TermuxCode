@@ -8,7 +8,7 @@ Aligned with product decisions: **Remote-first**, **wrap host CLIs**, success = 
 - [x] Rebrand TermuxCode  
 - [x] README remote-first narrative  
 - [x] Competitors + roadmap docs  
-- [x] Short demo script / GIF (community) — docs/DEMO.md script ready; GIF still welcome
+- [x] Short demo script (docs/DEMO.md); GIF still welcome from community
 
 ## R2 — Remote CLI adapters
 

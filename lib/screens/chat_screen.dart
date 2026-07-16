@@ -19,6 +19,7 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _inputCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
+  bool _wasConnected = false;
 
   @override
   void dispose() {
@@ -39,12 +40,28 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
+  void _syncRemoteCliOnConnect(SessionProvider session, ChatProvider chat) {
+    final connected = session.isConnected;
+    if (connected && !_wasConnected) {
+      _wasConnected = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || chat.isBusy) return;
+        chat.remoteCli.detect();
+      });
+    } else if (!connected && _wasConnected) {
+      _wasConnected = false;
+      chat.remoteCli.reset();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final chat = context.watch<ChatProvider>();
     final session = context.watch<SessionProvider>();
     final settings = context.watch<SettingsProvider>();
     final cs = Theme.of(context).colorScheme;
+
+    _syncRemoteCliOnConnect(session, chat);
 
     if (chat.messages.isNotEmpty) _scrollToBottom();
 
@@ -210,16 +227,27 @@ class _EmptyChat extends StatelessWidget {
   final ColorScheme cs;
   final AgentMode mode;
 
+  static const _quick = <(String, String)>[
+    ('磁盘占用', '查看磁盘使用情况并给出清理建议'),
+    ('系统信息', '汇总 uname、内存、磁盘与当前用户'),
+    ('最近日志', '找出系统里最可能的错误日志并摘要'),
+    ('/cli 探测', '/cli'),
+  ];
+
   @override
   Widget build(BuildContext context) {
+    final chat = context.read<ChatProvider>();
+    final session = context.watch<SessionProvider>();
+    final settings = context.watch<SettingsProvider>();
+
     return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(28),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.smart_toy_outlined, size: 72, color: cs.outline),
-            const SizedBox(height: 16),
+            Icon(Icons.smart_toy_outlined, size: 64, color: cs.outline),
+            const SizedBox(height: 12),
             Text(
               'TermuxCode Agent',
               style: Theme.of(context)
@@ -232,9 +260,51 @@ class _EmptyChat extends StatelessWidget {
             Text(
               '${mode.label}：${mode.descriptionZh}\n'
               'Chat / Plan / Build 可在上方切换\n'
-              '远端 CLI：点雷达探测，或 /cli 你的任务',
+              '远端 CLI：连接后自动探测，或 /cli 你的任务',
               style: TextStyle(color: cs.outline, fontSize: 13),
               textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 18),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.center,
+              children: [
+                for (final (label, prompt) in _quick)
+                  ActionChip(
+                    label: Text(label, style: const TextStyle(fontSize: 12)),
+                    onPressed: chat.isBusy
+                        ? null
+                        : () {
+                            if (prompt == '/cli') {
+                              if (!session.isConnected) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('请先连接 SSH')),
+                                );
+                                return;
+                              }
+                              chat.remoteCli.detect();
+                              return;
+                            }
+                            if (!settings.isConfigured) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('请先在设置填写 API Key，或改用 /cli'),
+                                ),
+                              );
+                              return;
+                            }
+                            if (mode != AgentMode.chat &&
+                                !session.isConnected) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('Plan/Build 需要先连接 SSH')),
+                              );
+                              return;
+                            }
+                            chat.sendMessage(prompt);
+                          },
+                  ),
+              ],
             ),
           ],
         ),

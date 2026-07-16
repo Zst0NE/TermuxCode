@@ -77,4 +77,13 @@ class RemoteCliSession extends ChangeNotifier {
     _log.clear();
     notifyListeners();
   }
+
+  /// Clear detection when SSH drops so UI does not show stale CLIs.
+  void reset() {
+    _available = {};
+    _selected = null;
+    _detecting = false;
+    _lastError = null;
+    notifyListeners();
+  }
 }
