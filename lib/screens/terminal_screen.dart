@@ -110,70 +110,59 @@ class _TerminalScreenState extends State<TerminalScreen> {
       );
     }
 
-    // Prefer the Terminal instance owned by SessionProvider (created on connect).
-    final sessionTerm = session.terminal;
-    final shellSession = session.shellSession;
+    // Multi-terminal on the same SSH server.
+    final tabs = session.tabs;
+    final active = session.activeTab;
 
-    if (shellSession != null) {
-      if (sessionTerm != null) {
-        _terminal = sessionTerm;
-        _attached = true;
-      } else if (!_attached) {
-        _terminal ??= Terminal();
-        shellSession.attachTerminal(_terminal!);
-        _attached = true;
-      }
-      // Keep remote PTY size in sync when the view auto-resizes the Terminal.
-      _terminal?.onResize = (w, h, pw, ph) => session.resize(w, h);
-    }
-
-    if (shellSession == null) {
+    if (tabs.isEmpty || active == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('终端')),
+        appBar: AppBar(title: Text(session.activeProfileLabel ?? '终端')),
         body: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const CircularProgressIndicator(),
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                onPressed: () async {
-                  try {
-                    await session.openShell();
-                    setState(() {
-                      _attached = true;
-                      _terminal = session.terminal;
-                    });
-                  } catch (e) {
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                          content: Text('打开终端失败：$e'),
-                          backgroundColor: Colors.red[800],
-                        ),
-                      );
-                    }
-                  }
-                },
-                icon: const Icon(Icons.open_in_new),
-                label: const Text('打开终端'),
-              ),
-            ],
+          child: FilledButton.icon(
+            onPressed: () async {
+              try {
+                await session.openNewTerminal();
+              } catch (e) {
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('打开终端失败：$e'),
+                    backgroundColor: Colors.red[800],
+                  ),
+                );
+              }
+            },
+            icon: const Icon(Icons.add),
+            label: const Text('新建终端'),
           ),
         ),
       );
     }
 
-    final term = _terminal;
+    final term = active.terminal;
+    term.onResize = (w, h, pw, ph) => session.resize(w, h);
+
     return Scaffold(
       appBar: AppBar(
         title: Text(session.activeProfileLabel ?? '终端'),
         actions: [
           IconButton(
+            tooltip: '新建终端（同机）',
+            onPressed: () async {
+              try {
+                await session.openNewTerminal();
+              } catch (e) {
+                if (!context.mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('新建失败：$e'), backgroundColor: Colors.red[800]),
+                );
+              }
+            },
+            icon: const Icon(Icons.add, size: 22),
+          ),
+          IconButton(
             tooltip: 'AI 生成命令',
-            onPressed: term == null
-                ? null
-                : () => _showNlCommandDialog(context, term),
+            onPressed: () => _showNlCommandDialog(context, term),
             icon: const Icon(Icons.auto_awesome, size: 20),
           ),
           IconButton(
@@ -190,51 +179,74 @@ class _TerminalScreenState extends State<TerminalScreen> {
             },
             icon: const Icon(Icons.text_increase, size: 20),
           ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            tooltip: '重新打开终端',
-            onPressed: () async {
-              _attached = false;
-              setState(() => _terminal = null);
-              try {
-                await session.openShell();
-                setState(() {
-                  _terminal = session.terminal;
-                  _attached = true;
-                });
-              } catch (e) {
-                if (context.mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('重新打开失败：$e'),
-                      backgroundColor: Colors.red[800],
-                    ),
-                  );
-                }
-              }
-            },
-          ),
         ],
       ),
-      body: term == null
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                Expanded(
-                  child: TerminalView(
-                    term,
-                    theme: _theme,
-                    textStyle: TerminalStyle(
-                      fontSize: _fontSize,
-                      fontFamily: 'monospace',
+      body: Column(
+        children: [
+          // Tab strip — multiple PTYs on one server
+          Material(
+            color: const Color(0xFF121816),
+            child: SizedBox(
+              height: 40,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: ListView.builder(
+                      scrollDirection: Axis.horizontal,
+                      itemCount: tabs.length,
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      itemBuilder: (ctx, i) {
+                        final t = tabs[i];
+                        final selected = i == session.activeTabIndex;
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 2,
+                            vertical: 6,
+                          ),
+                          child: InputChip(
+                            label: Text(
+                              t.title,
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: selected
+                                    ? const Color(0xFF00E5A0)
+                                    : null,
+                              ),
+                            ),
+                            selected: selected,
+                            onPressed: () => session.selectTab(i),
+                            onDeleted: tabs.length <= 1
+                                ? null
+                                : () => session.closeTab(i),
+                            deleteIconColor: cs.outline,
+                            visualDensity: VisualDensity.compact,
+                            materialTapTargetSize:
+                                MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        );
+                      },
                     ),
-                    autofocus: true,
-                    backgroundOpacity: 1,
                   ),
-                ),
-                TerminalKeyBar(terminal: term),
-              ],
+                ],
+              ),
             ),
+          ),
+          Expanded(
+            child: TerminalView(
+              term,
+              key: ValueKey(active.id),
+              theme: _theme,
+              textStyle: TerminalStyle(
+                fontSize: _fontSize,
+                fontFamily: 'monospace',
+              ),
+              autofocus: true,
+              backgroundOpacity: 1,
+            ),
+          ),
+          TerminalKeyBar(terminal: term),
+        ],
+      ),
     );
   }
 

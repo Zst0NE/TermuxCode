@@ -20,7 +20,6 @@ class ToolRegistry {
   }
 
   List<AgentTool> toolsFor(AgentMode mode) {
-    if (mode == AgentMode.chat) return const [];
     return _tools.where((t) => t.allowedModes.contains(mode)).toList();
   }
 

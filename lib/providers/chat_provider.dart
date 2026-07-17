@@ -36,7 +36,7 @@ class ChatProvider extends ChangeNotifier {
   bool _busy = false;
   bool _loaded = false;
   String? _error;
-  AgentMode _mode = AgentMode.build;
+  AgentMode _mode = AgentMode.ask;
   Timer? _saveDebounce;
 
   final Map<String, Completer<bool>> _approvalWaiters = {};
@@ -53,6 +53,12 @@ class ChatProvider extends ChangeNotifier {
   void setMode(AgentMode mode) {
     if (_mode == mode || _busy) return;
     _mode = mode;
+    _runtime.gate.mode = switch (mode) {
+      AgentMode.plan => PermissionMode.ask,
+      AgentMode.ask => PermissionMode.ask,
+      AgentMode.auto => PermissionMode.auto,
+      AgentMode.bypass => PermissionMode.bypass,
+    };
     notifyListeners();
   }
 
@@ -110,10 +116,12 @@ class ChatProvider extends ChangeNotifier {
         return;
       }
 
-      if (_mode != AgentMode.chat && !_ssh.isConnected) {
+      if (!_ssh.isConnected) {
         _messages.add(ChatMessage(
           role: ChatRole.assistant,
-          text: '当前模式为 ${_mode.label}，需要先连接 SSH 主机（或切换到 Chat 纯对话）。',
+          text:
+              '先连接你的远程主机，我才能在上面执行命令（Plan/Ask/Auto/Bypass 都需要主机）。\n'
+              '也可以先在设置里配好 API Key。',
         ));
         return;
       }
@@ -297,8 +305,8 @@ class ChatProvider extends ChangeNotifier {
   }
 
   Future<void> approveToolCall(ToolCall call) async {
-    if (!_ssh.isConnected && _mode != AgentMode.chat) {
-      _error = '请先连接 SSH 主机';
+    if (!_ssh.isConnected) {
+      _error = '请先连接远程主机';
       notifyListeners();
       _resolveWaiter(call.id, false);
       return;

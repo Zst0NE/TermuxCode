@@ -31,7 +31,12 @@ class ReadTool extends AgentTool {
   ToolRisk get risk => ToolRisk.low;
 
   @override
-  Set<AgentMode> get allowedModes => {AgentMode.plan, AgentMode.build};
+  Set<AgentMode> get allowedModes => {
+        AgentMode.plan,
+        AgentMode.ask,
+        AgentMode.auto,
+        AgentMode.bypass,
+      };
 
   @override
   Future<ToolResultPayload> execute(ToolCallRequest request) async {

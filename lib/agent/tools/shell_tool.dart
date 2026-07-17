@@ -35,7 +35,11 @@ class ShellTool extends AgentTool {
   ToolRisk get risk => ToolRisk.medium;
 
   @override
-  Set<AgentMode> get allowedModes => {AgentMode.build};
+  Set<AgentMode> get allowedModes => {
+        AgentMode.ask,
+        AgentMode.auto,
+        AgentMode.bypass,
+      };
 
   @override
   Future<ToolResultPayload> execute(ToolCallRequest request) async {

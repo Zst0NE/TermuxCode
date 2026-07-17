@@ -90,12 +90,12 @@ class AgentRuntime {
           toolCalls: turn.toolCalls,
         ));
 
-        if (mode == AgentMode.chat || mapped.isEmpty) {
+        if (mapped.isEmpty) {
           yield const AgentTurnDone();
           return;
         }
 
-        // Plan mode: only allow read/list; strip shell.
+        // Plan: only read/list; strip shell.
         final effective = mode == AgentMode.plan
             ? mapped
                 .where((r) => r.name == 'read' || r.name == 'list')
@@ -103,10 +103,18 @@ class AgentRuntime {
             : mapped;
 
         if (effective.isEmpty) {
-          // Model asked for shell in plan — surface text only.
+          // Model asked for shell in plan — text-only finish.
           yield const AgentTurnDone();
           return;
         }
+
+        // Sync gate policy from mode (ask / auto / bypass).
+        gate.mode = switch (mode) {
+          AgentMode.plan => PermissionMode.ask,
+          AgentMode.ask => PermissionMode.ask,
+          AgentMode.auto => PermissionMode.auto,
+          AgentMode.bypass => PermissionMode.bypass,
+        };
 
         for (final req in effective) {
           final tool = registry[req.name];

@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'package:uuid/uuid.dart';
 import 'package:xterm/xterm.dart';
 
 import '../models/ssh_connection_state.dart';
@@ -7,42 +8,56 @@ import '../services/secure_store.dart';
 import '../services/ssh_service.dart';
 import '../services/ssh_shell_session.dart';
 
-/// Manages a single active SSH session (connect / disconnect / shell).
+/// One interactive PTY tab on the shared SSH connection.
+class TerminalTab {
+  TerminalTab({
+    required this.id,
+    required this.title,
+    required this.session,
+    required this.terminal,
+  });
+
+  final String id;
+  String title;
+  final SshShellSession session;
+  final Terminal terminal;
+}
+
+/// SSH connection + **multiple** interactive shells on the same server.
 class SessionProvider extends ChangeNotifier {
   SessionProvider(this._store, [SshService? ssh]) : _ssh = ssh ?? SshService();
 
   final SecureStore _store;
   final SshService _ssh;
+  static const _uuid = Uuid();
 
   SshProfile? _activeProfile;
-  // Last successfully attempted profile; kept after disconnect/error so the UI
-  // can offer a one-tap "重新连接" without the user navigating to the profile list.
   SshProfile? _lastProfile;
-  SshShellSession? _shell;
-  Terminal? _terminal;
   SshConnectionState _state = SshConnectionState.disconnected;
   String? _error;
+
+  final List<TerminalTab> _tabs = [];
+  int _activeTabIndex = 0;
 
   SshService get ssh => _ssh;
   SshProfile? get activeProfile => _activeProfile;
   String? get activeProfileId => _activeProfile?.id;
   String? get activeProfileLabel => _activeProfile?.label;
-  /// The last profile that was (or attempted to be) connected.
-  /// Persists across disconnects and errors so reconnect is always available.
   SshProfile? get lastProfile => _lastProfile;
-  SshShellSession? get shellSession => _shell;
   SshConnectionState get state => _state;
   bool get isConnected => _state == SshConnectionState.connected;
   bool get isConnecting => _state == SshConnectionState.connecting;
   String? get error => _error;
 
-  /// The xterm Terminal instance for the current shell session.
-  Terminal? get terminal => _terminal;
+  List<TerminalTab> get tabs => List.unmodifiable(_tabs);
+  int get activeTabIndex => _activeTabIndex;
+  TerminalTab? get activeTab =>
+      _tabs.isEmpty ? null : _tabs[_activeTabIndex.clamp(0, _tabs.length - 1)];
 
-  /// Connect to [profile] and open an interactive shell.
-  ///
-  /// [onUnknownHostKey] / [onHostKeyMismatch] are forwarded to [SshService]
-  /// so the UI can prompt the user during host-key verification.
+  /// Back-compat for single-terminal callers.
+  SshShellSession? get shellSession => activeTab?.session;
+  Terminal? get terminal => activeTab?.terminal;
+
   Future<void> connect(
     SshProfile profile, {
     Future<bool> Function(
@@ -73,29 +88,21 @@ class SessionProvider extends ChangeNotifier {
         onHostKeyMismatch: onHostKeyMismatch,
       );
 
-      final term = Terminal();
-      _terminal = term;
-      _shell = await _ssh.openShell(cols: 80, rows: 24);
-      _shell!.attachTerminal(term);
+      await _closeAllTabs();
+      await openNewTerminal(title: 'shell-1');
 
       _state = SshConnectionState.connected;
       notifyListeners();
-
-      _shell!.done.then((_) {
-        _onShellDone();
-      });
     } catch (e) {
       _error = e.toString();
       _state = SshConnectionState.error;
       _activeProfile = null;
-      _shell = null;
-      _terminal = null;
+      await _closeAllTabs();
       notifyListeners();
       rethrow;
     }
   }
 
-  /// One-tap reconnect using [lastProfile]. Host-key prompts optional.
   Future<void> reconnect({
     Future<bool> Function(
       String host,
@@ -122,32 +129,84 @@ class SessionProvider extends ChangeNotifier {
     );
   }
 
-  /// Open (or re-open) an interactive shell on the current connection.
-  Future<SshShellSession> openShell({int cols = 80, int rows = 24}) async {
-    if (!isConnected) {
-      throw StateError('openShell called while not connected');
+  /// Open another PTY on the **same** SSH server (multi-terminal).
+  Future<TerminalTab> openNewTerminal({String? title, int cols = 80, int rows = 24}) async {
+    if (!_ssh.isConnected) {
+      throw StateError('openNewTerminal while not connected');
     }
-    _shell?.close();
+
+    final n = _tabs.length + 1;
     final term = Terminal();
-    _terminal = term;
-    _shell = await _ssh.openShell(cols: cols, rows: rows);
-    _shell!.attachTerminal(term);
+    final session = await _ssh.openShell(cols: cols, rows: rows);
+    session.attachTerminal(term);
+    final tab = TerminalTab(
+      id: _uuid.v4(),
+      title: title ?? 'shell-$n',
+      session: session,
+      terminal: term,
+    );
+    _tabs.add(tab);
+    _activeTabIndex = _tabs.length - 1;
     notifyListeners();
-    _shell!.done.then((_) => _onShellDone());
-    return _shell!;
+
+    session.done.then((_) {
+      _onTabDone(tab.id);
+    });
+    return tab;
   }
 
-  void _onShellDone() {
-    if (_state == SshConnectionState.disconnected) return;
-    _shell = null;
-    // Keep TCP session; only shell channel ended.
+  void selectTab(int index) {
+    if (index < 0 || index >= _tabs.length) return;
+    _activeTabIndex = index;
     notifyListeners();
+  }
+
+  Future<void> closeTab(int index) async {
+    if (index < 0 || index >= _tabs.length) return;
+    final tab = _tabs.removeAt(index);
+    try {
+      tab.session.close();
+    } catch (_) {}
+    if (_tabs.isEmpty) {
+      _activeTabIndex = 0;
+    } else if (_activeTabIndex >= _tabs.length) {
+      _activeTabIndex = _tabs.length - 1;
+    } else if (index < _activeTabIndex) {
+      _activeTabIndex -= 1;
+    }
+    notifyListeners();
+  }
+
+  void _onTabDone(String id) {
+    final i = _tabs.indexWhere((t) => t.id == id);
+    if (i < 0) return;
+    _tabs.removeAt(i);
+    if (_tabs.isEmpty) {
+      _activeTabIndex = 0;
+    } else if (_activeTabIndex >= _tabs.length) {
+      _activeTabIndex = _tabs.length - 1;
+    }
+    notifyListeners();
+  }
+
+  Future<void> _closeAllTabs() async {
+    for (final t in _tabs) {
+      try {
+        t.session.close();
+      } catch (_) {}
+    }
+    _tabs.clear();
+    _activeTabIndex = 0;
+  }
+
+  /// Legacy: open/replace single shell — now opens a **new** tab.
+  Future<SshShellSession> openShell({int cols = 80, int rows = 24}) async {
+    final tab = await openNewTerminal(cols: cols, rows: rows);
+    return tab.session;
   }
 
   Future<void> disconnect() async {
-    _shell?.close();
-    _shell = null;
-    _terminal = null;
+    await _closeAllTabs();
     await _ssh.disconnect();
     _activeProfile = null;
     _state = SshConnectionState.disconnected;
@@ -155,12 +214,11 @@ class SessionProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Resize the PTY when the terminal widget changes size.
-  void resize(int cols, int rows) => _shell?.resize(cols, rows);
+  void resize(int cols, int rows) => activeTab?.session.resize(cols, rows);
 
   @override
   void dispose() {
-    _shell?.close();
+    _closeAllTabs();
     _ssh.dispose();
     super.dispose();
   }

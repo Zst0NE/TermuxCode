@@ -72,10 +72,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _syncRemoteCliOnConnect(session, chat);
     if (chat.messages.isNotEmpty) _scrollToBottom();
 
-    final needsSsh = chat.mode != AgentMode.chat;
-    final canSend = !chat.isBusy &&
-        (session.isConnected ||
-            (settings.isConfigured && chat.mode == AgentMode.chat));
+    final canSend = !chat.isBusy && settings.isConfigured && session.isConnected;
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0F0E),
@@ -115,11 +112,12 @@ class _ChatScreenState extends State<ChatScreen> {
                     dense: true,
                     contentPadding: EdgeInsets.zero,
                     leading: Icon(
-                      m == AgentMode.chat
-                          ? Icons.chat_outlined
-                          : m == AgentMode.plan
-                              ? Icons.map_outlined
-                              : Icons.construction_outlined,
+                      switch (m) {
+                        AgentMode.plan => Icons.map_outlined,
+                        AgentMode.ask => Icons.front_hand_outlined,
+                        AgentMode.auto => Icons.bolt_outlined,
+                        AgentMode.bypass => Icons.flash_on,
+                      },
                       size: 20,
                     ),
                     title: Text(m.label),
@@ -139,9 +137,12 @@ class _ChatScreenState extends State<ChatScreen> {
                 visualDensity: VisualDensity.compact,
                 label: Text(chat.mode.label, style: const TextStyle(fontSize: 12)),
                 avatar: Icon(
-                  chat.mode == AgentMode.build
-                      ? Icons.bolt
-                      : Icons.psychology_outlined,
+                  switch (chat.mode) {
+                    AgentMode.plan => Icons.map_outlined,
+                    AgentMode.ask => Icons.front_hand_outlined,
+                    AgentMode.auto => Icons.bolt_outlined,
+                    AgentMode.bypass => Icons.flash_on,
+                  },
                   size: 16,
                 ),
               ),
@@ -165,7 +166,7 @@ class _ChatScreenState extends State<ChatScreen> {
       ),
       body: Column(
         children: [
-          if (needsSsh && !session.isConnected)
+          if (!session.isConnected)
             _SoftBanner(
               icon: Icons.link_off_rounded,
               message: '连接你的服务器后，我才能在上面执行命令',
@@ -205,7 +206,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         );
                         return;
                       }
-                      if (needsSsh && !session.isConnected) {
+                      if (!session.isConnected) {
                         widget.onOpenServers?.call();
                         return;
                       }
@@ -254,7 +255,7 @@ class _ChatScreenState extends State<ChatScreen> {
             hint: session.isConnected
                 ? '有什么可以帮你的？可让我在远程主机上执行…'
                 : '先聊聊，或配置主机后让我远程执行命令…',
-            onSend: () => _handleSend(chat, session, settings, needsSsh),
+            onSend: () => _handleSend(chat, session, settings),
           ),
         ],
       ),
@@ -265,7 +266,6 @@ class _ChatScreenState extends State<ChatScreen> {
     ChatProvider chat,
     SessionProvider session,
     SettingsProvider settings,
-    bool needsSsh,
   ) {
     final text = _inputCtrl.text.trim();
     if (text.isEmpty) return;
@@ -302,7 +302,7 @@ class _ChatScreenState extends State<ChatScreen> {
       );
       return;
     }
-    if (needsSsh && !session.isConnected) {
+    if (!session.isConnected) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: const Text('执行命令需要先连接你的服务器'),
