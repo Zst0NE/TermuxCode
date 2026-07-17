@@ -92,7 +92,9 @@ class _ChatScreenState extends State<ChatScreen> {
             ),
             Text(
               session.isConnected
-                  ? '可在 ${session.activeProfileLabel ?? "远程主机"} 上执行命令'
+                  ? (chat.backend == AgentBackend.remoteNative
+                      ? '远程 ${chat.remoteCli.selected?.label ?? "Agent"} · ${chat.mode.label}'
+                      : '内置 Agent · ${chat.mode.label} · ${session.activeProfileLabel ?? "主机"}')
                   : '对话式 AI · 连接主机后可远程执行',
               style: TextStyle(
                 fontSize: 11,

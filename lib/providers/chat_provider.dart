@@ -268,10 +268,15 @@ class ChatProvider extends ChangeNotifier {
         final idx = _messages.indexWhere((m) => m.id == id);
         if (idx < 0) return;
         final prev = _messages[idx];
+        // Cap bubble size for mobile UI.
+        var next = '${prev.text}$text';
+        if (next.length > 120000) {
+          next = '${next.substring(next.length - 100000)}\n…(截断旧输出)';
+        }
         _messages[idx] = ChatMessage(
           id: prev.id,
           role: ChatRole.assistant,
-          text: '${prev.text}$text',
+          text: next,
           createdAt: prev.createdAt,
         );
         notifyListeners();
@@ -292,19 +297,20 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
-  /// Heuristic turn end: no new stdout for [quiet] duration.
+  /// Heuristic turn end: no new stdout for [quiet] duration after some output.
   Future<void> _waitRemoteTurnIdle({
     required Duration timeout,
-    Duration quiet = const Duration(seconds: 4),
+    Duration quiet = const Duration(seconds: 5),
+    Duration minWait = const Duration(seconds: 2),
   }) async {
     final start = DateTime.now();
-    var lastLen = -1;
+    await Future<void>.delayed(minWait);
+    var lastLen = _remoteAgent.outputLength;
     var stableSince = DateTime.now();
     while (DateTime.now().difference(start) < timeout) {
-      await Future<void>.delayed(const Duration(milliseconds: 400));
-      final id = _remoteStreamMsgId;
-      final idx = id == null ? -1 : _messages.indexWhere((m) => m.id == id);
-      final len = idx >= 0 ? _messages[idx].text.length : 0;
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      if (!_remoteAgent.isRunning) return;
+      final len = _remoteAgent.outputLength;
       if (len != lastLen) {
         lastLen = len;
         stableSince = DateTime.now();
@@ -312,7 +318,6 @@ class ChatProvider extends ChangeNotifier {
           DateTime.now().difference(stableSince) >= quiet) {
         return;
       }
-      if (!_remoteAgent.isRunning) return;
     }
   }
 
