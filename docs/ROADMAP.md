@@ -1,47 +1,25 @@
 # Roadmap
 
-Aligned with product decisions: **Remote-first**, **wrap host CLIs**, success = open-source traction.
+## MVP complete (v0.2.0)
 
-## R1 — Story & demo (docs)
+- [x] Chat-first Doubao/Claude-style UI  
+- [x] Dual backend: remote native agent (PTY) + builtin harness  
+- [x] Plan / Ask / Auto / Bypass  
+- [x] Claude-like tools: shell, read, list, glob, grep, write, todo  
+- [x] Project memory (CLAUDE.md / AISH.md)  
+- [x] Multi-terminal on one SSH host  
+- [x] Model list fetch, streaming, host-key trust  
+- [x] Remote Ask confirm + interrupt  
 
-- [x] Public repo + v0.1.0 / v0.1.1 APK  
-- [x] Rebrand TermuxCode  
-- [x] README remote-first narrative  
-- [x] Competitors + roadmap docs  
-- [x] Short demo script (docs/DEMO.md); GIF still welcome from community
+## Optional later
 
-## R2 — Remote CLI adapters
+- [ ] Host-side JSON bridge for cleaner agent events  
+- [ ] Multi-conversation list  
+- [ ] Local Termux as host  
+- [ ] Real release signing + applicationId migration  
+- [ ] Multi-ABI / Play Store  
 
-- [x] Detect `opencode` / `claude` / `codex` on SSH host  
-- [x] Non-interactive prompt runner with safe quoting  
-- [x] Surface CLI output in Agent UI (`/cli`)  
-- [x] Deep-support **one** CLI first (prefer OpenCode) — improved detect + single-quote + run/exec/-p ladder
+## Non-goals
 
-## R3 — Control-plane UX
-
-- [x] Chat/agent history persistence  
-- [x] Streaming LLM tokens (HTTP, OpenAI SSE; Anthropic falls back)  
-- [x] Remote CLI detect/run skeleton (`/cli`, settings probe)  
-- [x] Auto-fetch model list + searchable filter chips  
-- [x] Tool result timeline (status chips, collapsible output)  
-- [x] Session reconnect (`lastProfile` + top strip / terminal CTA)  
-- [ ] Disconnect auto-detect while idle (keep-alive)  
-- [ ] Tool timeline polish (timestamps / duration)
-
-## R4 — Local Termux as host
-
-- [ ] Workspace type: Remote SSH | Local Termux  
-- [ ] Stable local exec bridge (Run Command / documented integration)  
-- [ ] Same adapter interface as remote  
-
-## Later
-
-- Real release signing + applicationId migration  
-- Multi-ABI APK / Play hygiene  
-- Subagents, MCP, `/undo`  
-
-## Non-goals (near term)
-
-- Full OpenCode reimplementation  
-- Team multiplayer  
-- DB IDE / knowledge-base product surface  
+- Full local Claude Code runtime inside the APK  
+- Silent destructive auto-run  

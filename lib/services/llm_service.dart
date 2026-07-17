@@ -504,10 +504,6 @@ Rules:
     return candidates;
   }
 
-  /// `GET {base}/models` for OpenAI-compatible providers (incl. DeepSeek, etc.).
-  Uri _openAiModelsUrl(String baseUrl) =>
-      _openAiModelsCandidateUrls(baseUrl).first;
-
   /// `GET {base}/v1/models` for Anthropic (or base already ending in /models).
   Uri _anthropicModelsUrl(String baseUrl) {
     final base = _parseHttpBase(baseUrl);

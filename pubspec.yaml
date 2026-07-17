@@ -1,7 +1,7 @@
 name: termux_ai
-description: TermuxCode — AI-powered mobile terminal & coding agent (SSH + local Termux roadmap).
+description: TermuxCode — chat-first AI for your remote servers (Claude/Codex/OpenCode control plane).
 publish_to: "none"
-version: 0.1.2+3
+version: 0.2.0+4
 
 environment:
   sdk: ">=3.3.0 <4.0.0"

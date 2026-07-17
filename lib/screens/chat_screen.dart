@@ -243,6 +243,36 @@ class _ChatScreenState extends State<ChatScreen> {
               textColor: cs.onSurfaceVariant,
             ),
           if (_showAdvanced) const RemoteCliBar(),
+          if (chat.todos.items.isNotEmpty)
+            Material(
+              color: const Color(0xFF121A18),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '任务清单',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: cs.primary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      chat.todos.summary,
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontFamily: 'monospace',
+                        color: cs.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           if (chat.awaitingRemoteSendConfirm)
             Material(
               color: const Color(0xFF2A2410),

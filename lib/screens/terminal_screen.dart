@@ -16,8 +16,6 @@ class TerminalScreen extends StatefulWidget {
 }
 
 class _TerminalScreenState extends State<TerminalScreen> {
-  Terminal? _terminal;
-  bool _attached = false;
   double _fontSize = 13;
 
   static const _theme = TerminalTheme(

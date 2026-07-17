@@ -1,91 +1,73 @@
 # TermuxCode
 
-**TermuxCode** is a **chat-first AI app** (Doubao / Claude App style).  
-Talk naturally; when needed the AI runs commands on **your** remote server/container over SSH (with approval).  
-Not a classic SSH client first — a conversation product with remote execution superpowers.
+**Chat-first AI app for your own servers** — Flutter / Android.
+
+Talk like **Doubao / Claude / ChatGPT**. When needed, the AI runs commands on **your** remote host (SSH).  
+If the host already has **Claude Code / Codex / OpenCode**, TermuxCode drives those **native agents** over a PTY.  
+Otherwise it uses a **built-in Claude-style harness** (BYOK + tools) over SSH.
 
 [![Release](https://img.shields.io/github/v/release/Zst0NE/TermuxCode)](https://github.com/Zst0NE/TermuxCode/releases)
-[![License](https://img.shields.io/badge/license-personal-lightgrey)](#license)
 
-**中文：** TermuxCode 是手机上的 AI 终端 / Coding Agent 控制面。默认 **远程 SSH 优先**；用自然语言 + 批准流程操作主机；内置轻量 Agent Runtime；目标是包装远端 OpenCode/Claude Code，并把本机 Termux 作为可选执行环境。
+## Install
 
-## Why TermuxCode?
+Latest: **[v0.1.2](https://github.com/Zst0NE/TermuxCode/releases/tag/v0.1.2)**  
+APK: arm64-v8a, debug-signed (sideload).
 
-| You want… | TermuxCode |
-|-----------|------------|
-| Phone-native SSH + PTY | Yes (`dartssh2` + `xterm`) |
-| AI that **asks before running** commands | Yes (approval cards + permission gate) |
-| BYOK (OpenAI-compatible / Anthropic) | Yes |
-| Full desktop agent brain (LSP, multi-agent fleet) | **No** — we wrap CLIs instead of reimplementing OpenCode |
-| Local Termux as the main OS | Roadmap (local backend), not the only path |
-
-See [docs/COMPETITORS.md](docs/COMPETITORS.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
-
-## Architecture (target)
-
-```text
-┌─────────────────────────────────────┐
-│  TermuxCode App (Flutter)           │
-│  Terminal · Agent UI · Approvals    │
-└──────────────────┬──────────────────┘
-                   │ SSH / (later) Bridge
-┌──────────────────▼──────────────────┐
-│  Host: PC · VPS · optional Termux   │
-│  shell · opencode · claude · codex  │
-└─────────────────────────────────────┘
+```bash
+adb install -r TermuxCode-0.1.2-arm64-v8a-release.apk
 ```
 
-Today the built-in harness still executes tools via **SSH `exec`**. Remote CLI adapters detect and invoke host binaries when available.
+## Product model
 
-## Features (v0.1.x)
+| Layer | Role |
+|-------|------|
+| Phone UI | Conversation, modes, approvals, multi-terminal |
+| Remote host | Your VPS / container — preferred brain if Claude/Codex/OpenCode installed |
+| Builtin agent | Fallback: your API key + remote shell/read/write/glob/grep/todo |
 
-- SSH profiles (password / key) + **host-key trust** dialog  
-- Interactive PTY, mobile key bar, font size, NL→command wand  
-- Agent page: **Chat / Plan / Build**  
-- Tools: `shell`, `read`, `list` + permission deny/allow/ask  
-- BYOK + Markdown replies  
-- Android release: [v0.1.0 APK (arm64)](https://github.com/Zst0NE/TermuxCode/releases/tag/v0.1.0)
+## Features (complete MVP)
+
+- **Chat-first UI** — 对话 / 服务器 / 终端 / 设置  
+- **Backends** — 远程 Agent (PTY) \| 内置 Agent (BYOK)  
+- **Modes** — Plan · Ask · Auto (default) · Bypass (hard-deny still applies)  
+- **Builtin tools** — shell, read, list, glob, grep, write, todo  
+- **Project memory** — loads host `CLAUDE.md` / `AISH.md` when present  
+- **SSH** — profiles, host-key trust, keepalive, reconnect  
+- **Multi-terminal** — multiple PTYs on one SSH connection  
+- **Remote Ask confirm** + interrupt  
+- **Model list** auto-fetch (OpenAI-compatible / Anthropic)  
+- **Streaming** replies (OpenAI SSE)  
 
 ## Quick start
 
-### Install APK
+1. **设置** → Base URL + API Key → 拉取模型 → 保存  
+2. **服务器** → 添加并连接你的主机（信任指纹）  
+3. **对话** → 默认 **Auto**；有远程 CLI 时优先 **远程 Agent**  
+4. **终端** → `+` 多开 shell（同机）  
 
-1. Download [TermuxCode-0.1.0-arm64-v8a-release.apk](https://github.com/Zst0NE/TermuxCode/releases/download/v0.1.0/TermuxCode-0.1.0-arm64-v8a-release.apk)  
-2. Allow unknown sources → install  
-3. **Settings**: Base URL + model + API key  
-4. **连接**: add SSH host → trust fingerprint → connect  
-5. **终端** / **Agent**: work
+## Architecture
 
-> Signing: v0.1.0 uses the **debug keystore** (sideload-friendly, not store-ready).  
-> ABI: **arm64-v8a** only.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/ROADMAP.md](docs/ROADMAP.md), [docs/DEMO.md](docs/DEMO.md), [docs/COMPETITORS.md](docs/COMPETITORS.md).
 
-### Build from source
+```text
+Phone chat UI  ──SSH──►  Host: claude | codex | opencode  (preferred)
+                    └─►  Builtin tools via exec            (fallback)
+```
+
+## Build
 
 ```bash
 flutter pub get
 flutter build apk --release --target-platform android-arm64
 ```
 
-## Project layout
-
-```text
-lib/
-  agent/           # AgentRuntime · tools · permission · remote CLI adapters
-  models/ services/ providers/ screens/ widgets/
-docs/              # competitors · roadmap
-```
-
-## Security
+## Security notes
 
 - Secrets in OS keystore only  
-- Host key change blocks connect  
-- Shell tools go through approval / deny patterns  
-- Do not use debug-signed builds on production servers without review  
-
-## Contributing / feedback
-
-Issues and ideas welcome: https://github.com/Zst0NE/TermuxCode/issues  
+- Host-key trust on first connect  
+- Hard-deny for catastrophic commands even in Bypass  
+- Debug signing — replace before store listing  
 
 ## License
 
-Personal / learning project for now.
+Personal / learning project.
