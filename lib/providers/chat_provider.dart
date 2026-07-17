@@ -18,10 +18,14 @@ class ChatProvider extends ChangeNotifier {
         _ssh = ssh,
         _llm = llm ?? LlmService() {
     final stack = buildDefaultAgentStack(_ssh, mode: PermissionMode.auto);
+    _todos = stack.todos;
+    _memory = ProjectMemory(_ssh);
     _runtime = AgentRuntime(
       llm: _llm,
       registry: stack.registry,
       gate: stack.gate,
+      memory: _memory,
+      todos: _todos,
     );
     _remote = RemoteCliSession(_ssh);
     _remoteAgent = RemoteAgentSession(_ssh);
@@ -35,6 +39,8 @@ class ChatProvider extends ChangeNotifier {
   late final AgentRuntime _runtime;
   late final RemoteCliSession _remote;
   late final RemoteAgentSession _remoteAgent;
+  late final TodoStore _todos;
+  late final ProjectMemory _memory;
 
   final List<ChatMessage> _messages = [];
   bool _busy = false;
@@ -58,6 +64,9 @@ class ChatProvider extends ChangeNotifier {
   AgentBackend get backend => _backend;
   RemoteCliSession get remoteCli => _remote;
   RemoteAgentSession get remoteAgent => _remoteAgent;
+  TodoStore get todos => _todos;
+  ProjectMemory get memory => _memory;
+  String get hostCwd => _memory.cwd;
 
   void setMode(AgentMode mode) {
     if (_mode == mode || _busy) return;
@@ -109,9 +118,9 @@ class ChatProvider extends ChangeNotifier {
   /// After SSH connect: detect CLIs and prefer remote native if any found.
   Future<void> onHostConnected() async {
     await _remote.detect();
+    await _memory.refresh();
     if (_remote.hasAny) {
       _backend = AgentBackend.remoteNative;
-      // Prefer claude > opencode > codex if present
       for (final k in [
         RemoteCliKind.claude,
         RemoteCliKind.opencode,
@@ -403,10 +412,13 @@ class ChatProvider extends ChangeNotifier {
               for (final t in toolCalls)
                 ToolCall(
                   id: t.id,
+                  name: t.name,
                   command: (t.arguments['command'] as String?) ??
                       (t.arguments['path'] as String?) ??
+                      (t.arguments['pattern'] as String?) ??
                       t.name,
                   rationale: t.arguments['rationale'] as String?,
+                  arguments: t.arguments,
                 ),
             ],
             createdAt: last.createdAt,
@@ -419,10 +431,13 @@ class ChatProvider extends ChangeNotifier {
               for (final t in toolCalls)
                 ToolCall(
                   id: t.id,
+                  name: t.name,
                   command: (t.arguments['command'] as String?) ??
                       (t.arguments['path'] as String?) ??
+                      (t.arguments['pattern'] as String?) ??
                       t.name,
                   rationale: t.arguments['rationale'] as String?,
+                  arguments: t.arguments,
                 ),
             ],
           ));

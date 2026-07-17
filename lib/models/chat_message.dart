@@ -3,38 +3,48 @@ import 'package:uuid/uuid.dart';
 /// Role of a message in the agent conversation.
 enum ChatRole { system, user, assistant, tool }
 
-/// A request from the model to run a shell command on the connected host.
+/// A tool invocation requested by the model (Claude Code style multi-tool).
 ///
-/// This is our single tool: `run_command`. The model emits one (or more) of
-/// these; the app asks the user to approve, executes over SSH, then feeds the
-/// [ToolResult] back into the conversation.
+/// [command] is kept for shell/`run_command` UI compatibility.
 class ToolCall {
   /// Provider-assigned id used to correlate the result back to the call.
   final String id;
 
-  /// The shell command the model wants to run.
+  /// Tool name: shell, read, list, glob, grep, write, todo, run_command, …
+  final String name;
+
+  /// The shell command when [name] is shell/run_command; else a short display.
   final String command;
 
-  /// Model's own short explanation of why it wants to run this. Optional;
-  /// populated from the tool arguments when present.
+  /// Model's own short explanation (optional).
   final String? rationale;
+
+  /// Full JSON arguments for non-shell tools.
+  final Map<String, dynamic> arguments;
 
   const ToolCall({
     required this.id,
+    this.name = 'shell',
     required this.command,
     this.rationale,
+    this.arguments = const {},
   });
 
   Map<String, dynamic> toJson() => {
         'id': id,
+        'name': name,
         'command': command,
         if (rationale != null) 'rationale': rationale,
+        if (arguments.isNotEmpty) 'arguments': arguments,
       };
 
   factory ToolCall.fromJson(Map<String, dynamic> json) => ToolCall(
         id: json['id'] as String,
+        name: json['name'] as String? ?? 'shell',
         command: json['command'] as String? ?? '',
         rationale: json['rationale'] as String?,
+        arguments: (json['arguments'] as Map?)?.cast<String, dynamic>() ??
+            const {},
       );
 }
 

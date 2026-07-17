@@ -87,36 +87,83 @@ class LlmService {
     required String apiKey,
     required List<ChatMessage> messages,
     required String systemPrompt,
+    List<Map<String, dynamic>>? tools,
   }) async {
     final key = _sanitizeApiKey(apiKey);
+    final toolPayload = tools ?? [_openAiTool];
     switch (config.kind) {
       case LlmProviderKind.openai:
-        return _completeOpenAi(config, key, messages, systemPrompt);
+        return _completeOpenAi(
+          config,
+          key,
+          messages,
+          systemPrompt,
+          toolPayload,
+        );
       case LlmProviderKind.anthropic:
-        return _completeAnthropic(config, key, messages, systemPrompt);
+        return _completeAnthropic(
+          config,
+          key,
+          messages,
+          systemPrompt,
+          _toAnthropicTools(toolPayload),
+        );
     }
   }
 
   /// Stream assistant text deltas, then a final [LlmStreamDone] with tool calls.
-  ///
-  /// OpenAI uses SSE (`stream: true`). Anthropic falls back to non-stream
-  /// complete and emits a single text delta for UI consistency.
   Stream<LlmStreamEvent> completeStream({
     required LlmProviderConfig config,
     required String apiKey,
     required List<ChatMessage> messages,
     required String systemPrompt,
+    List<Map<String, dynamic>>? tools,
   }) async* {
     final key = _sanitizeApiKey(apiKey);
+    final toolPayload = tools ?? [_openAiTool];
     switch (config.kind) {
       case LlmProviderKind.openai:
-        yield* _streamOpenAi(config, key, messages, systemPrompt);
+        yield* _streamOpenAi(
+          config,
+          key,
+          messages,
+          systemPrompt,
+          toolPayload,
+        );
       case LlmProviderKind.anthropic:
-        final turn =
-            await _completeAnthropic(config, key, messages, systemPrompt);
+        final turn = await _completeAnthropic(
+          config,
+          key,
+          messages,
+          systemPrompt,
+          _toAnthropicTools(toolPayload),
+        );
         if (turn.text.isNotEmpty) yield LlmTextDelta(turn.text);
         yield LlmStreamDone(turn);
     }
+  }
+
+  List<Map<String, dynamic>> _toAnthropicTools(
+    List<Map<String, dynamic>> openAiStyle,
+  ) {
+    final out = <Map<String, dynamic>>[];
+    for (final t in openAiStyle) {
+      if (t['type'] == 'function' && t['function'] is Map) {
+        final fn = t['function'] as Map<String, dynamic>;
+        out.add({
+          'name': fn['name'],
+          'description': fn['description'] ?? '',
+          'input_schema': fn['parameters'] ??
+              {
+                'type': 'object',
+                'properties': <String, dynamic>{},
+              },
+        });
+      } else if (t['name'] != null) {
+        out.add(t);
+      }
+    }
+    return out.isEmpty ? [_anthropicTool] : out;
   }
 
   /// List model IDs from the provider (OpenAI-compatible `GET /models`,
@@ -331,6 +378,7 @@ Rules:
     String apiKey,
     List<ChatMessage> messages,
     String systemPrompt,
+    List<Map<String, dynamic>> tools,
   ) async {
     final url = _openAiUrl(config.baseUrl);
 
@@ -341,7 +389,7 @@ Rules:
         {'role': 'system', 'content': systemPrompt},
         ..._toOpenAiMessages(messages),
       ],
-      'tools': [_openAiTool],
+      'tools': tools,
       'tool_choice': 'auto',
     });
 
@@ -369,11 +417,22 @@ Rules:
 
     final toolCalls = rawCalls.map((tc) {
       final fn = tc['function'] as Map<String, dynamic>;
-      final args = jsonDecode(fn['arguments'] as String) as Map<String, dynamic>;
-      return ToolCall(
-        id: tc['id'] as String,
-        command: args['command'] as String,
-        rationale: args['rationale'] as String?,
+      final name = fn['name'] as String? ?? 'shell';
+      Map<String, dynamic> args = {};
+      try {
+        final rawArgs = fn['arguments'];
+        if (rawArgs is String && rawArgs.isNotEmpty) {
+          args = jsonDecode(rawArgs) as Map<String, dynamic>;
+        } else if (rawArgs is Map) {
+          args = rawArgs.cast<String, dynamic>();
+        }
+      } catch (_) {
+        args = {'command': '${fn['arguments']}'};
+      }
+      return _toolCallFromNameArgs(
+        id: tc['id'] as String? ?? 'call',
+        name: name,
+        args: args,
       );
     }).toList();
 
@@ -381,6 +440,28 @@ Rules:
       text: text,
       toolCalls: toolCalls,
       stopReason: stopReason,
+    );
+  }
+
+  ToolCall _toolCallFromNameArgs({
+    required String id,
+    required String name,
+    required Map<String, dynamic> args,
+  }) {
+    final normalized = name == 'run_command' ? 'shell' : name;
+    final command = switch (normalized) {
+      'shell' => (args['command'] as String?) ?? '',
+      'read' || 'list' || 'write' => (args['path'] as String?) ?? normalized,
+      'glob' || 'grep' => (args['pattern'] as String?) ?? normalized,
+      'todo' => 'todo',
+      _ => normalized,
+    };
+    return ToolCall(
+      id: id,
+      name: normalized,
+      command: command,
+      rationale: args['rationale'] as String?,
+      arguments: args,
     );
   }
 
@@ -556,6 +637,7 @@ Rules:
     String apiKey,
     List<ChatMessage> messages,
     String systemPrompt,
+    List<Map<String, dynamic>> tools,
   ) async {
     final url = _anthropicUrl(config.baseUrl);
 
@@ -564,7 +646,7 @@ Rules:
       'max_tokens': 4096,
       'temperature': config.temperature,
       'system': systemPrompt,
-      'tools': [_anthropicTool],
+      'tools': tools,
       'messages': _toAnthropicMessages(messages),
     });
 
@@ -592,11 +674,12 @@ Rules:
       if (type == 'text') {
         textBuf.write(block['text'] as String);
       } else if (type == 'tool_use') {
-        final input = block['input'] as Map<String, dynamic>;
-        toolCalls.add(ToolCall(
-          id: block['id'] as String,
-          command: input['command'] as String,
-          rationale: input['rationale'] as String?,
+        final input = (block['input'] as Map?)?.cast<String, dynamic>() ?? {};
+        final name = block['name'] as String? ?? 'shell';
+        toolCalls.add(_toolCallFromNameArgs(
+          id: block['id'] as String? ?? 'call',
+          name: name,
+          args: input,
         ));
       }
     }
@@ -687,6 +770,7 @@ Rules:
     String apiKey,
     List<ChatMessage> messages,
     String systemPrompt,
+    List<Map<String, dynamic>> tools,
   ) async* {
     final url = _openAiUrl(config.baseUrl);
     final body = jsonEncode({
@@ -697,7 +781,7 @@ Rules:
         {'role': 'system', 'content': systemPrompt},
         ..._toOpenAiMessages(messages),
       ],
-      'tools': [_openAiTool],
+      'tools': tools,
       'tool_choice': 'auto',
     });
 
@@ -801,12 +885,11 @@ Rules:
       } catch (_) {
         args = {'command': acc['arguments']};
       }
-      final cmd = args['command'] as String? ?? '';
-      if (cmd.isEmpty && acc['name'] != _runCommandToolName) continue;
-      toolCalls.add(ToolCall(
+      final name = acc['name']!.isEmpty ? 'shell' : acc['name']!;
+      toolCalls.add(_toolCallFromNameArgs(
         id: acc['id']!.isEmpty ? 'call_$k' : acc['id']!,
-        command: cmd.isEmpty ? acc['arguments']! : cmd,
-        rationale: args['rationale'] as String?,
+        name: name,
+        args: args,
       ));
     }
 

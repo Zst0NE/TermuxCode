@@ -6,25 +6,28 @@ import 'agent_events.dart';
 import 'agent_mode.dart';
 import 'context_builder.dart';
 import 'permission_gate.dart';
+import 'project_memory.dart';
+import 'todo_store.dart';
 import 'tool.dart';
 import 'tool_registry.dart';
 
 /// Coding-agent harness loop (Claude Code / OpenCode style).
-///
-/// Emits [AgentEvent]s. For [PermissionDecision.ask], emits
-/// [AgentPermissionRequest] and waits on [onApprove].
 class AgentRuntime {
   AgentRuntime({
     required this.llm,
     required this.registry,
     required this.gate,
     this.contextBuilder = const ContextBuilder(),
+    this.memory,
+    this.todos,
   });
 
   final LlmService llm;
   final ToolRegistry registry;
   final PermissionGate gate;
   final ContextBuilder contextBuilder;
+  final ProjectMemory? memory;
+  final TodoStore? todos;
 
   /// Run one user turn under [mode].
   Stream<AgentEvent> run({
@@ -43,12 +46,14 @@ class AgentRuntime {
       ChatMessage(role: ChatRole.user, text: userText),
     ];
 
-    final system = contextBuilder.systemPrompt(mode);
+    final todoHint =
+        (todos != null && todos!.summary.isNotEmpty) ? '\n${todos!.summary}\n' : '';
+    final mem = memory?.asSystemSuffix() ?? '';
+    final system = '${contextBuilder.systemPrompt(mode)}$todoHint$mem';
     final maxSteps = config.maxSteps;
     var steps = 0;
+    final tools = registry.openAiToolsPayload(mode);
 
-    // Chat mode: single completion without tools (LlmService still sends tool
-    // schema today — model is instructed not to call tools).
     try {
       while (steps < maxSteps) {
         steps++;
@@ -58,6 +63,7 @@ class AgentRuntime {
           apiKey: apiKey,
           messages: conversation,
           systemPrompt: system,
+          tools: tools.isEmpty ? null : tools,
         )) {
           switch (ev) {
             case LlmTextDelta(:final delta):
@@ -68,20 +74,20 @@ class AgentRuntime {
         }
         turn ??= const LlmTurnResult();
 
-        // Map LlmService run_command tool calls → shell ToolCallRequest.
         final mapped = <ToolCallRequest>[
           for (final tc in turn.toolCalls)
             ToolCallRequest(
               id: tc.id,
-              name: 'shell',
-              arguments: {
-                'command': tc.command,
-                if (tc.rationale != null) 'rationale': tc.rationale,
-              },
+              name: tc.name.isEmpty ? 'shell' : tc.name,
+              arguments: tc.arguments.isNotEmpty
+                  ? tc.arguments
+                  : {
+                      if (tc.command.isNotEmpty) 'command': tc.command,
+                      if (tc.rationale != null) 'rationale': tc.rationale,
+                    },
             ),
         ];
 
-        // Finalize assistant message (full text + tool cards).
         yield AgentAssistantText(turn.text, toolCalls: mapped);
 
         conversation.add(ChatMessage(
@@ -95,20 +101,23 @@ class AgentRuntime {
           return;
         }
 
-        // Plan: only read/list; strip shell.
+        // Plan: only read/list/glob/grep/todo
         final effective = mode == AgentMode.plan
             ? mapped
-                .where((r) => r.name == 'read' || r.name == 'list')
+                .where((r) =>
+                    r.name == 'read' ||
+                    r.name == 'list' ||
+                    r.name == 'glob' ||
+                    r.name == 'grep' ||
+                    r.name == 'todo')
                 .toList()
             : mapped;
 
         if (effective.isEmpty) {
-          // Model asked for shell in plan — text-only finish.
           yield const AgentTurnDone();
           return;
         }
 
-        // Sync gate policy from mode (ask / auto / bypass).
         gate.mode = switch (mode) {
           AgentMode.plan => PermissionMode.ask,
           AgentMode.ask => PermissionMode.ask,
@@ -117,7 +126,8 @@ class AgentRuntime {
         };
 
         for (final req in effective) {
-          final tool = registry[req.name];
+          final tool = registry[req.name] ??
+              (req.name == 'run_command' ? registry['shell'] : null);
           final risk = tool?.risk ?? ToolRisk.high;
           final decision = gate.evaluate(req, risk);
 
