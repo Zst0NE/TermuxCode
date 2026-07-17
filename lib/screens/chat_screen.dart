@@ -52,13 +52,14 @@ class _ChatScreenState extends State<ChatScreen> {
     final connected = session.isConnected;
     if (connected && !_wasConnected) {
       _wasConnected = true;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
         if (!mounted || chat.isBusy) return;
-        chat.remoteCli.detect();
+        await chat.onHostConnected();
       });
     } else if (!connected && _wasConnected) {
       _wasConnected = false;
       chat.remoteCli.reset();
+      chat.remoteAgent.stop();
     }
   }
 
@@ -72,7 +73,10 @@ class _ChatScreenState extends State<ChatScreen> {
     _syncRemoteCliOnConnect(session, chat);
     if (chat.messages.isNotEmpty) _scrollToBottom();
 
-    final canSend = !chat.isBusy && settings.isConfigured && session.isConnected;
+    final canSend = !chat.isBusy &&
+        session.isConnected &&
+        (chat.backend == AgentBackend.remoteNative ||
+            settings.isConfigured);
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0F0E),
@@ -99,9 +103,59 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
-          // Soft mode menu (Claude/Codex capability without ops UI clutter)
+          // Backend: remote native agent vs builtin
+          PopupMenuButton<AgentBackend>(
+            tooltip: '执行后端',
+            initialValue: chat.backend,
+            onSelected: chat.isBusy ? null : chat.setBackend,
+            itemBuilder: (ctx) => [
+              PopupMenuItem(
+                value: AgentBackend.remoteNative,
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.cloud_sync, size: 20),
+                  title: const Text('远程 Agent'),
+                  subtitle: const Text(
+                    '控制主机上的 Claude / Codex / OpenCode',
+                    style: TextStyle(fontSize: 11),
+                  ),
+                  trailing: chat.backend == AgentBackend.remoteNative
+                      ? Icon(Icons.check, color: cs.primary, size: 18)
+                      : null,
+                ),
+              ),
+              PopupMenuItem(
+                value: AgentBackend.builtin,
+                child: ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.phone_android, size: 20),
+                  title: const Text('内置 Agent'),
+                  subtitle: const Text(
+                    '手机 BYOK + 远程执行工具',
+                    style: TextStyle(fontSize: 11),
+                  ),
+                  trailing: chat.backend == AgentBackend.builtin
+                      ? Icon(Icons.check, color: cs.primary, size: 18)
+                      : null,
+                ),
+              ),
+            ],
+            child: Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: Chip(
+                visualDensity: VisualDensity.compact,
+                label: Text(
+                  chat.backend == AgentBackend.remoteNative ? '远程' : '内置',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ),
+          ),
+          // Soft mode menu (Plan / Ask / Auto / Bypass)
           PopupMenuButton<AgentMode>(
-            tooltip: '能力模式',
+            tooltip: '权限模式',
             initialValue: chat.mode,
             onSelected: chat.isBusy ? null : chat.setMode,
             itemBuilder: (ctx) => [
@@ -132,10 +186,11 @@ class _ChatScreenState extends State<ChatScreen> {
                 ),
             ],
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 4),
               child: Chip(
                 visualDensity: VisualDensity.compact,
-                label: Text(chat.mode.label, style: const TextStyle(fontSize: 12)),
+                label:
+                    Text(chat.mode.label, style: const TextStyle(fontSize: 12)),
                 avatar: Icon(
                   switch (chat.mode) {
                     AgentMode.plan => Icons.map_outlined,
@@ -175,12 +230,13 @@ class _ChatScreenState extends State<ChatScreen> {
               color: cs.surfaceContainerHighest,
               textColor: cs.onSurfaceVariant,
             ),
-          if (!settings.isConfigured)
+          if (!settings.isConfigured &&
+              chat.backend == AgentBackend.builtin)
             _SoftBanner(
               icon: Icons.key_outlined,
-              message: '配置 API Key 后开始对话（BYOK）',
+              message: '内置 Agent 需要 API Key；有远程 Claude/Codex 可切到「远程」',
               actionLabel: '设置',
-              onAction: null, // user uses bottom tab
+              onAction: null,
               color: cs.surfaceContainerHighest,
               textColor: cs.onSurfaceVariant,
             ),
@@ -419,7 +475,8 @@ class _EmptyChat extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               '像豆包 / Claude 一样对话。\n'
-              '连上你的服务器后，我可以在上面执行命令（需你确认）。',
+              '连上你的服务器后，优先控制主机上的 Claude / Codex / OpenCode。\n'
+              '没有原生 Agent 时，用内置 Agent + 你的 API Key。',
               style: TextStyle(
                 color: cs.onSurfaceVariant,
                 fontSize: 14,

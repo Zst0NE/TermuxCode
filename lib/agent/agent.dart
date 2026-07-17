@@ -16,3 +16,4 @@ export 'remote/remote_cli_kind.dart';
 export 'remote/remote_cli_detector.dart';
 export 'remote/remote_cli_adapter.dart';
 export 'remote/remote_cli_session.dart';
+export 'remote/remote_agent_session.dart';

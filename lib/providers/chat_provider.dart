@@ -8,7 +8,7 @@ import '../services/llm_service.dart';
 import '../services/secure_store.dart';
 import '../services/ssh_service.dart';
 
-/// Chat + Agent Harness state for the AI screen.
+/// Chat + dual backends: builtin harness OR remote native Claude/Codex/OpenCode.
 class ChatProvider extends ChangeNotifier {
   ChatProvider({
     required SecureStore store,
@@ -17,13 +17,16 @@ class ChatProvider extends ChangeNotifier {
   })  : _store = store,
         _ssh = ssh,
         _llm = llm ?? LlmService() {
-    final stack = buildDefaultAgentStack(_ssh, mode: PermissionMode.ask);
+    final stack = buildDefaultAgentStack(_ssh, mode: PermissionMode.auto);
     _runtime = AgentRuntime(
       llm: _llm,
       registry: stack.registry,
       gate: stack.gate,
     );
     _remote = RemoteCliSession(_ssh);
+    _remoteAgent = RemoteAgentSession(_ssh);
+    _mode = AgentMode.auto;
+    _runtime.gate.mode = PermissionMode.auto;
   }
 
   final SecureStore _store;
@@ -31,13 +34,17 @@ class ChatProvider extends ChangeNotifier {
   final LlmService _llm;
   late final AgentRuntime _runtime;
   late final RemoteCliSession _remote;
+  late final RemoteAgentSession _remoteAgent;
 
   final List<ChatMessage> _messages = [];
   bool _busy = false;
   bool _loaded = false;
   String? _error;
-  AgentMode _mode = AgentMode.ask;
+  AgentMode _mode = AgentMode.auto;
+  AgentBackend _backend = AgentBackend.builtin;
   Timer? _saveDebounce;
+  StreamSubscription<RemoteAgentEvent>? _remoteSub;
+  String? _remoteStreamMsgId;
 
   final Map<String, Completer<bool>> _approvalWaiters = {};
   final Set<String> _resolvedToolCalls = {};
@@ -48,7 +55,9 @@ class ChatProvider extends ChangeNotifier {
   bool get historyLoaded => _loaded;
   String? get error => _error;
   AgentMode get mode => _mode;
+  AgentBackend get backend => _backend;
   RemoteCliSession get remoteCli => _remote;
+  RemoteAgentSession get remoteAgent => _remoteAgent;
 
   void setMode(AgentMode mode) {
     if (_mode == mode || _busy) return;
@@ -62,10 +71,15 @@ class ChatProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setBackend(AgentBackend backend) {
+    if (_backend == backend || _busy) return;
+    _backend = backend;
+    notifyListeners();
+  }
+
   bool isAwaitingApproval(String id) =>
       _approvalWaiters.containsKey(id) && !_resolvedToolCalls.contains(id);
 
-  /// Restore transcript from secure storage (call once after create).
   Future<void> loadHistory() async {
     if (_loaded) return;
     try {
@@ -88,10 +102,30 @@ class ChatProvider extends ChangeNotifier {
         await _store.saveChatHistory(
           _messages.map((m) => m.toJson()).toList(),
         );
-      } catch (_) {
-        // Persistence must not break chat.
-      }
+      } catch (_) {}
     });
+  }
+
+  /// After SSH connect: detect CLIs and prefer remote native if any found.
+  Future<void> onHostConnected() async {
+    await _remote.detect();
+    if (_remote.hasAny) {
+      _backend = AgentBackend.remoteNative;
+      // Prefer claude > opencode > codex if present
+      for (final k in [
+        RemoteCliKind.claude,
+        RemoteCliKind.opencode,
+        RemoteCliKind.codex,
+      ]) {
+        if (_remote.available.containsKey(k)) {
+          _remote.select(k);
+          break;
+        }
+      }
+    } else {
+      _backend = AgentBackend.builtin;
+    }
+    notifyListeners();
   }
 
   Future<void> sendMessage(String text) async {
@@ -105,53 +139,55 @@ class ChatProvider extends ChangeNotifier {
     _scheduleSave();
 
     try {
-      final cfg = await _store.loadLlmConfig();
-      final key = (await _store.loadLlmApiKey()) ?? '';
-
-      if (!cfg.isConfigured || key.trim().isEmpty) {
-        _messages.add(ChatMessage(
-          role: ChatRole.assistant,
-          text: '请先在「设置」配置 LLM Base URL / 模型 / API Key。',
-        ));
-        return;
-      }
-
       if (!_ssh.isConnected) {
         _messages.add(ChatMessage(
           role: ChatRole.assistant,
-          text:
-              '先连接你的远程主机，我才能在上面执行命令（Plan/Ask/Auto/Bypass 都需要主机）。\n'
-              '也可以先在设置里配好 API Key。',
+          text: '先连接你的远程主机。连上后我会优先使用主机上的 Claude / Codex / OpenCode（若已安装）。',
         ));
         return;
       }
 
-      try {
-        await for (final event in _runtime.run(
-          userText: text.trim(),
-          mode: _mode,
-          config: cfg,
-          apiKey: key,
-          history: [
-            for (final m in _messages)
-              if (m.id != userMsg.id) m,
-          ],
-          onApprove: (req) async {
-            final completer = Completer<bool>();
-            _approvalWaiters[req.id] = completer;
-            notifyListeners();
-            return completer.future;
-          },
-        )) {
-          _handleEvent(event, userMsg.text);
-        }
-      } catch (e) {
+      if (_backend == AgentBackend.remoteNative) {
+        await _sendViaRemoteNative(text.trim());
+        return;
+      }
+
+      // Builtin harness path (BYOK).
+      final cfg = await _store.loadLlmConfig();
+      final key = (await _store.loadLlmApiKey()) ?? '';
+      if (!cfg.isConfigured || key.trim().isEmpty) {
         _messages.add(ChatMessage(
           role: ChatRole.assistant,
-          text: 'Agent 运行失败：$e',
+          text: '内置 Agent 需要 API Key。也可切换到「远程 Agent」使用主机上的 Claude/Codex/OpenCode。',
         ));
-        _error = '$e';
+        return;
       }
+
+      await for (final event in _runtime.run(
+        userText: text.trim(),
+        mode: _mode,
+        config: cfg,
+        apiKey: key,
+        history: [
+          for (final m in _messages)
+            if (m.id != userMsg.id) m,
+        ],
+        onApprove: (req) async {
+          // Auto/Bypass may still emit ask for non-allowlist; Completer UI.
+          final completer = Completer<bool>();
+          _approvalWaiters[req.id] = completer;
+          notifyListeners();
+          return completer.future;
+        },
+      )) {
+        _handleEvent(event, userMsg.text);
+      }
+    } catch (e) {
+      _messages.add(ChatMessage(
+        role: ChatRole.assistant,
+        text: 'Agent 运行失败：$e',
+      ));
+      _error = '$e';
     } finally {
       _busy = false;
       _cancelPendingWaiters();
@@ -160,7 +196,127 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
-  /// Run prompt on host-side OpenCode/Claude/Codex if detected.
+  Future<void> _sendViaRemoteNative(String text) async {
+    if (!_remote.hasAny) {
+      await _remote.detect();
+    }
+    if (!_remote.hasAny || _remote.selected == null) {
+      _messages.add(ChatMessage(
+        role: ChatRole.assistant,
+        text:
+            '主机上未检测到 claude / codex / opencode。\n'
+            '请在服务器安装其一，或切换到「内置 Agent」并用 API Key。',
+      ));
+      return;
+    }
+
+    final kind = _remote.selected!;
+    // Prefix mode hint for plan-like behavior on remote agents.
+    final payload = switch (_mode) {
+      AgentMode.plan =>
+        '[Plan mode — propose a plan only, do not execute destructive steps]\n$text',
+      AgentMode.ask =>
+        '[Ask mode — explain before running commands]\n$text',
+      AgentMode.auto => text,
+      AgentMode.bypass =>
+        '[Autonomous mode — proceed carefully]\n$text',
+    };
+
+    try {
+      if (!_remoteAgent.isRunning || _remoteAgent.kind != kind) {
+        _messages.add(ChatMessage(
+          role: ChatRole.assistant,
+          text: '正在主机上启动 **${kind.label}**（PTY 会话）…',
+        ));
+        notifyListeners();
+        await _remoteSub?.cancel();
+        await _remoteAgent.start(kind);
+        _remoteSub = _remoteAgent.events.listen(_onRemoteAgentEvent);
+        // Give CLI a moment to boot.
+        await Future<void>.delayed(const Duration(milliseconds: 800));
+      }
+
+      // Streaming bubble
+      final streamMsg = ChatMessage(
+        role: ChatRole.assistant,
+        text: '',
+      );
+      _remoteStreamMsgId = streamMsg.id;
+      _messages.add(streamMsg);
+      notifyListeners();
+
+      _remoteAgent.send(payload);
+
+      // Wait until idle gap or timeout (simple turn boundary for PTY agents).
+      await _waitRemoteTurnIdle(timeout: const Duration(minutes: 6));
+    } catch (e) {
+      _messages.add(ChatMessage(
+        role: ChatRole.assistant,
+        text: '远程 Agent 失败：$e',
+      ));
+      _error = '$e';
+    } finally {
+      _remoteStreamMsgId = null;
+    }
+  }
+
+  void _onRemoteAgentEvent(RemoteAgentEvent e) {
+    switch (e) {
+      case RemoteAgentText(:final text):
+        final id = _remoteStreamMsgId;
+        if (id == null) return;
+        final idx = _messages.indexWhere((m) => m.id == id);
+        if (idx < 0) return;
+        final prev = _messages[idx];
+        _messages[idx] = ChatMessage(
+          id: prev.id,
+          role: ChatRole.assistant,
+          text: '${prev.text}$text',
+          createdAt: prev.createdAt,
+        );
+        notifyListeners();
+        _scheduleSave();
+      case RemoteAgentStatus(:final message):
+        // Soft status as system-like assistant line if no stream yet.
+        if (_remoteStreamMsgId == null) {
+          _messages.add(ChatMessage(role: ChatRole.assistant, text: '… $message'));
+          notifyListeners();
+        }
+      case RemoteAgentExit():
+        _busy = false;
+        notifyListeners();
+      case RemoteAgentError(:final message):
+        _messages.add(ChatMessage(role: ChatRole.assistant, text: '错误：$message'));
+        _busy = false;
+        notifyListeners();
+    }
+  }
+
+  /// Heuristic turn end: no new stdout for [quiet] duration.
+  Future<void> _waitRemoteTurnIdle({
+    required Duration timeout,
+    Duration quiet = const Duration(seconds: 4),
+  }) async {
+    final start = DateTime.now();
+    var lastLen = -1;
+    var stableSince = DateTime.now();
+    while (DateTime.now().difference(start) < timeout) {
+      await Future<void>.delayed(const Duration(milliseconds: 400));
+      final id = _remoteStreamMsgId;
+      final idx = id == null ? -1 : _messages.indexWhere((m) => m.id == id);
+      final len = idx >= 0 ? _messages[idx].text.length : 0;
+      if (len != lastLen) {
+        lastLen = len;
+        stableSince = DateTime.now();
+      } else if (len > 0 &&
+          DateTime.now().difference(stableSince) >= quiet) {
+        return;
+      }
+      if (!_remoteAgent.isRunning) return;
+    }
+  }
+
+  /// Non-interactive one-shot (legacy /cli).
   Future<void> runRemoteCli(String prompt) async {
     if (prompt.trim().isEmpty || _busy) return;
     if (!_ssh.isConnected) {
@@ -176,15 +332,11 @@ class ChatProvider extends ChangeNotifier {
     ));
     notifyListeners();
     try {
-      if (!_remote.hasAny) {
-        await _remote.detect();
-      }
+      if (!_remote.hasAny) await _remote.detect();
       if (!_remote.hasAny) {
         _messages.add(ChatMessage(
           role: ChatRole.assistant,
-          text:
-              '远端未检测到 opencode / claude / codex。请在主机安装 CLI，或在终端中手动运行。\n'
-              '${_remote.lastError ?? ''}',
+          text: '远端未检测到 opencode / claude / codex。',
         ));
         return;
       }
@@ -196,7 +348,7 @@ class ChatProvider extends ChangeNotifier {
       }
       _messages.add(ChatMessage(
         role: ChatRole.assistant,
-        text: '### ${kind.label} 输出\n\n```\n${buf.toString().trim()}\n```',
+        text: '### ${kind.label}\n\n```\n${buf.toString().trim()}\n```',
       ));
     } catch (e) {
       _error = '$e';
@@ -217,7 +369,6 @@ class ChatProvider extends ChangeNotifier {
         if (text == userText) return;
         _messages.add(ChatMessage(role: ChatRole.user, text: text));
       case AgentAssistantDelta(:final delta):
-        // Grow the last assistant bubble while streaming; create one if needed.
         if (_messages.isNotEmpty &&
             _messages.last.role == ChatRole.assistant &&
             !_messages.last.hasToolCalls) {
@@ -235,7 +386,6 @@ class ChatProvider extends ChangeNotifier {
         notifyListeners();
         return;
       case AgentAssistantText(:final text, :final toolCalls):
-        // Replace trailing streamed assistant (no tools) with final message.
         if (_messages.isNotEmpty &&
             _messages.last.role == ChatRole.assistant &&
             !_messages.last.hasToolCalls) {
@@ -336,6 +486,8 @@ class ChatProvider extends ChangeNotifier {
   @override
   void dispose() {
     _saveDebounce?.cancel();
+    _remoteSub?.cancel();
+    _remoteAgent.dispose();
     _cancelPendingWaiters();
     _llm.dispose();
     super.dispose();
