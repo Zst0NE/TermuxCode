@@ -59,7 +59,10 @@ class ToolCallCard extends StatelessWidget {
                         Icon(Icons.terminal, size: 16, color: cs.primary),
                         const SizedBox(width: 6),
                         Text(
-                          'AI 请求执行命令',
+                          toolCall.name == 'shell' ||
+                                  toolCall.name == 'run_command'
+                              ? 'AI 请求执行命令'
+                              : 'AI 请求工具 · ${toolCall.name}',
                           style: TextStyle(
                             color: cs.primary,
                             fontSize: 12,
