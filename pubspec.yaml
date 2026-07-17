@@ -1,7 +1,7 @@
 name: termux_ai
 description: TermuxCode — AI-powered mobile terminal & coding agent (SSH + local Termux roadmap).
 publish_to: "none"
-version: 0.1.1+2
+version: 0.1.2+3
 
 environment:
   sdk: ">=3.3.0 <4.0.0"

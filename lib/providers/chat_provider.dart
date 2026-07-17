@@ -51,6 +51,8 @@ class ChatProvider extends ChangeNotifier {
   Timer? _saveDebounce;
   StreamSubscription<RemoteAgentEvent>? _remoteSub;
   String? _remoteStreamMsgId;
+  Completer<bool>? _remoteSendConfirm;
+  String? _pendingRemotePreview;
 
   final Map<String, Completer<bool>> _approvalWaiters = {};
   final Set<String> _resolvedToolCalls = {};
@@ -67,6 +69,32 @@ class ChatProvider extends ChangeNotifier {
   TodoStore get todos => _todos;
   ProjectMemory get memory => _memory;
   String get hostCwd => _memory.cwd;
+
+  /// Remote Ask-mode: waiting for user to confirm sending to host agent.
+  bool get awaitingRemoteSendConfirm =>
+      _remoteSendConfirm != null && !(_remoteSendConfirm!.isCompleted);
+  String? get pendingRemotePreview => _pendingRemotePreview;
+
+  /// Confirm or cancel a pending remote Ask-mode send.
+  void resolveRemoteSendConfirm(bool ok) {
+    final c = _remoteSendConfirm;
+    if (c == null || c.isCompleted) return;
+    c.complete(ok);
+    _remoteSendConfirm = null;
+    _pendingRemotePreview = null;
+    notifyListeners();
+  }
+
+  /// Interrupt remote native agent (Ctrl+C).
+  void interruptRemoteAgent() {
+    _remoteAgent.interrupt();
+    _messages.add(ChatMessage(
+      role: ChatRole.assistant,
+      text: '已向远程 Agent 发送中断（Ctrl+C）。',
+    ));
+    _busy = false;
+    notifyListeners();
+  }
 
   void setMode(AgentMode mode) {
     if (_mode == mode || _busy) return;
@@ -225,11 +253,28 @@ class ChatProvider extends ChangeNotifier {
       AgentMode.plan =>
         '[Plan mode — propose a plan only, do not execute destructive steps]\n$text',
       AgentMode.ask =>
-        '[Ask mode — explain before running commands]\n$text',
+        '[Ask mode — explain before running commands; wait for confirmation]\n$text',
       AgentMode.auto => text,
       AgentMode.bypass =>
         '[Autonomous mode — proceed carefully]\n$text',
     };
+
+    // Ask mode: user confirms before anything is sent to the host agent.
+    if (_mode == AgentMode.ask) {
+      _pendingRemotePreview = text;
+      _remoteSendConfirm = Completer<bool>();
+      notifyListeners();
+      final ok = await _remoteSendConfirm!.future;
+      _pendingRemotePreview = null;
+      _remoteSendConfirm = null;
+      if (!ok) {
+        _messages.add(ChatMessage(
+          role: ChatRole.assistant,
+          text: '已取消发送到远程 Agent。',
+        ));
+        return;
+      }
+    }
 
     try {
       if (!_remoteAgent.isRunning || _remoteAgent.kind != kind) {
@@ -242,7 +287,7 @@ class ChatProvider extends ChangeNotifier {
         await _remoteAgent.start(kind);
         _remoteSub = _remoteAgent.events.listen(_onRemoteAgentEvent);
         // Give CLI a moment to boot.
-        await Future<void>.delayed(const Duration(milliseconds: 800));
+        await Future<void>.delayed(const Duration(milliseconds: 1200));
       }
 
       // Streaming bubble
@@ -256,8 +301,8 @@ class ChatProvider extends ChangeNotifier {
 
       _remoteAgent.send(payload);
 
-      // Wait until idle gap or timeout (simple turn boundary for PTY agents).
-      await _waitRemoteTurnIdle(timeout: const Duration(minutes: 6));
+      // Wait until idle gap, prompt-like waiting, or timeout.
+      await _waitRemoteTurnIdle(timeout: const Duration(minutes: 8));
     } catch (e) {
       _messages.add(ChatMessage(
         role: ChatRole.assistant,
@@ -306,10 +351,10 @@ class ChatProvider extends ChangeNotifier {
     }
   }
 
-  /// Heuristic turn end: no new stdout for [quiet] duration after some output.
+  /// Heuristic turn end: quiet period, or agent looks like it's waiting for input.
   Future<void> _waitRemoteTurnIdle({
     required Duration timeout,
-    Duration quiet = const Duration(seconds: 5),
+    Duration quiet = const Duration(seconds: 4),
     Duration minWait = const Duration(seconds: 2),
   }) async {
     final start = DateTime.now();
@@ -317,15 +362,20 @@ class ChatProvider extends ChangeNotifier {
     var lastLen = _remoteAgent.outputLength;
     var stableSince = DateTime.now();
     while (DateTime.now().difference(start) < timeout) {
-      await Future<void>.delayed(const Duration(milliseconds: 350));
+      await Future<void>.delayed(const Duration(milliseconds: 300));
       if (!_remoteAgent.isRunning) return;
       final len = _remoteAgent.outputLength;
       if (len != lastLen) {
         lastLen = len;
         stableSince = DateTime.now();
-      } else if (len > 0 &&
-          DateTime.now().difference(stableSince) >= quiet) {
-        return;
+      } else if (len > 0) {
+        final idle = DateTime.now().difference(stableSince);
+        if (idle >= quiet) return;
+        // Prompt-like ending with a shorter quiet window.
+        if (idle >= const Duration(seconds: 2) &&
+            _remoteAgent.looksLikeWaitingForInput) {
+          return;
+        }
       }
     }
   }
@@ -490,6 +540,9 @@ class ChatProvider extends ChangeNotifier {
 
   Future<void> clearMessages() async {
     _cancelPendingWaiters();
+    if (awaitingRemoteSendConfirm) {
+      resolveRemoteSendConfirm(false);
+    }
     _messages.clear();
     _resolvedToolCalls.clear();
     notifyListeners();

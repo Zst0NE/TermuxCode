@@ -243,6 +243,68 @@ class _ChatScreenState extends State<ChatScreen> {
               textColor: cs.onSurfaceVariant,
             ),
           if (_showAdvanced) const RemoteCliBar(),
+          if (chat.awaitingRemoteSendConfirm)
+            Material(
+              color: const Color(0xFF2A2410),
+              child: Padding(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Text(
+                      'Ask 模式：确认发送到远程 Agent？',
+                      style: TextStyle(
+                        color: cs.onSurface,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      chat.pendingRemotePreview ?? '',
+                      maxLines: 4,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: cs.onSurfaceVariant,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () =>
+                                chat.resolveRemoteSendConfirm(false),
+                            child: const Text('取消'),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: FilledButton(
+                            onPressed: () =>
+                                chat.resolveRemoteSendConfirm(true),
+                            child: const Text('发送到远程'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          if (chat.isBusy &&
+              chat.backend == AgentBackend.remoteNative &&
+              chat.remoteAgent.isRunning)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: chat.interruptRemoteAgent,
+                icon: const Icon(Icons.stop_circle_outlined, size: 18),
+                label: const Text('中断远程 Agent'),
+              ),
+            ),
           Expanded(
             child: chat.messages.isEmpty
                 ? _EmptyChat(

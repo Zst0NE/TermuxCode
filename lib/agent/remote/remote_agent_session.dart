@@ -84,6 +84,35 @@ class RemoteAgentSession extends ChangeNotifier {
   DateTime get lastOutputAt => _lastOutputAt;
   int get outputLength => _rawBuf.length;
 
+  /// Last ~400 chars of cleaned output (for prompt/idle heuristics).
+  String get tailText {
+    final s = _rawBuf.toString();
+    if (s.length <= 400) return s;
+    return s.substring(s.length - 400);
+  }
+
+  /// Whether output looks like the agent is waiting for user input.
+  bool get looksLikeWaitingForInput {
+    final t = tailText.trimRight();
+    if (t.isEmpty) return false;
+    final lines = t.split('\n').where((l) => l.trim().isNotEmpty).toList();
+    if (lines.isEmpty) return false;
+    final last = lines.last.trim();
+    // Common CLI / agent prompts
+    if (RegExp(r'[❯>:%#$]\s*$').hasMatch(last)) return true;
+    if (RegExp(r'(Human|User|You)\s*:\s*$', caseSensitive: false)
+        .hasMatch(last)) {
+      return true;
+    }
+    if (last.toLowerCase().contains('waiting for') ||
+        last.toLowerCase().contains('press enter') ||
+        last.contains('请输入') ||
+        last.contains('等待')) {
+      return true;
+    }
+    return false;
+  }
+
   Future<void> start(RemoteCliKind kind) async {
     if (!_ssh.isConnected) {
       throw StateError('SSH not connected');
