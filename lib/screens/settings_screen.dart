@@ -84,7 +84,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _resolveApiKey(SettingsProvider prov) {
     final typed = _apiKey.text.trim();
     if (typed.isEmpty) return prov.apiKey.trim();
-    if (typed.contains('••••')) return prov.apiKey.trim();
+    // Masked display from SecureStore reload — use in-memory real key.
+    if (typed.contains('•') || typed.contains('●') || typed.contains('…')) {
+      return prov.apiKey.trim();
+    }
     return typed;
   }
 
@@ -100,7 +103,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
     if (key.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先填写有效的 API Key（不要只保留掩码）')),
+        const SnackBar(
+          content: Text('请重新粘贴完整 API Key（不要只保留 sk-•••• 掩码）'),
+        ),
       );
       return;
     }
@@ -121,11 +126,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       if (!mounted) return;
       setState(() {
         _modelIds = ids;
-        // Keep current model if still present; otherwise pick a sensible default.
         final current = _model.text.trim();
-        if (current.isNotEmpty && ids.contains(current)) {
-          // ok
-        } else {
+        if (current.isEmpty || !ids.contains(current)) {
           _model.text = _pickPreferredModel(ids, _kind);
         }
       });
@@ -134,14 +136,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
       );
     } catch (e) {
       if (!mounted) return;
+      final msg = '$e';
       setState(() {
-        _modelsError = '$e';
+        _modelsError = msg;
         _modelIds = [];
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('拉取失败：$e'),
-          backgroundColor: Colors.red[800],
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('拉取模型失败'),
+          content: SingleChildScrollView(child: SelectableText(msg)),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('知道了'),
+            ),
+          ],
         ),
       );
     } finally {

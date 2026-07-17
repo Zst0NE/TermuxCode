@@ -129,12 +129,30 @@ class LlmService {
     if (key.isEmpty) {
       throw const LlmException('API Key 为空，无法拉取模型列表');
     }
-    switch (config.kind) {
-      case LlmProviderKind.openai:
-        return _listOpenAiModels(config.baseUrl, key);
-      case LlmProviderKind.anthropic:
-        return _listAnthropicModels(config.baseUrl, key);
+    if (_looksLikeMaskedKey(key)) {
+      throw const LlmException(
+        '检测到掩码 Key（含 •），请重新粘贴完整 API Key 后再拉取',
+      );
     }
+    try {
+      switch (config.kind) {
+        case LlmProviderKind.openai:
+          return await _listOpenAiModels(config.baseUrl, key);
+        case LlmProviderKind.anthropic:
+          return await _listAnthropicModels(config.baseUrl, key);
+      }
+    } on LlmException {
+      rethrow;
+    } catch (e) {
+      throw LlmException('拉取模型失败: ${e.runtimeType}: $e');
+    }
+  }
+
+  bool _looksLikeMaskedKey(String key) {
+    return key.contains('•') ||
+        key.contains('●') ||
+        key.contains('…') ||
+        key.contains('...');
   }
 
   /// Strip whitespace/newlines that break HTTP headers (→ ArgumentError).
@@ -142,22 +160,50 @@ class LlmService {
     return apiKey
         .trim()
         .replaceAll(RegExp(r'[\r\n\t]'), '')
-        .replaceAll(RegExp(r'\s+'), '');
+        .replaceAll(' ', '');
   }
 
   Future<List<String>> _listOpenAiModels(String baseUrl, String apiKey) async {
-    final url = _openAiModelsUrl(baseUrl);
-    _assertAbsoluteHttpUrl(url, baseUrl);
-    final body = await _get(
-      url: url,
-      headers: {
-        'Authorization': 'Bearer $apiKey',
-        'Content-Type': 'application/json',
-      },
+    final candidates = _openAiModelsCandidateUrls(baseUrl);
+    Object? lastError;
+    for (final url in candidates) {
+      try {
+        final body = await _get(
+          url: url,
+          headers: {
+            'Authorization': 'Bearer $apiKey',
+            'Accept': 'application/json',
+          },
+        );
+        final ids = _parseOpenAiModelIds(body);
+        if (ids.isNotEmpty) return ids;
+        lastError = LlmException('模型列表为空（$url）');
+      } on LlmException catch (e) {
+        lastError = e;
+        // Try next candidate on 404/not found style errors.
+        final msg = e.message.toLowerCase();
+        final retryable = e.statusCode == 404 ||
+            e.statusCode == 405 ||
+            msg.contains('404') ||
+            msg.contains('not found');
+        if (!retryable && e.statusCode != null) rethrow;
+      } catch (e) {
+        lastError = e;
+      }
+    }
+    throw LlmException(
+      '无法拉取模型列表。已尝试：\n'
+      '${candidates.map((u) => '• $u').join('\n')}\n'
+      '最后错误: $lastError\n'
+      '请确认 Base URL（如 https://api.openai.com/v1 或 https://api.deepseek.com/v1）'
+      '与 API Key 正确，或手动填写模型 ID。',
     );
+  }
+
+  List<String> _parseOpenAiModelIds(String body) {
     final json = jsonDecode(body);
     final ids = <String>{};
-    if (json is Map<String, dynamic>) {
+    if (json is Map) {
       final data = json['data'];
       if (data is List) {
         for (final item in data) {
@@ -166,8 +212,18 @@ class LlmService {
           }
         }
       }
+      // Some gateways: { "models": [ {"id":...} ] }
+      final models = json['models'];
+      if (models is List) {
+        for (final item in models) {
+          if (item is Map && item['id'] is String) {
+            ids.add(item['id'] as String);
+          } else if (item is String) {
+            ids.add(item);
+          }
+        }
+      }
     } else if (json is List) {
-      // Some proxies return a bare list.
       for (final item in json) {
         if (item is Map && item['id'] is String) {
           ids.add(item['id'] as String);
@@ -176,29 +232,23 @@ class LlmService {
         }
       }
     }
-    if (ids.isEmpty) {
-      throw LlmException(
-        '模型列表为空或响应格式无法解析（请求 ${url.toString()}）',
-      );
-    }
     final list = ids.toList()..sort();
     return list;
   }
 
   Future<List<String>> _listAnthropicModels(String baseUrl, String apiKey) async {
     final url = _anthropicModelsUrl(baseUrl);
-    _assertAbsoluteHttpUrl(url, baseUrl);
     final body = await _get(
       url: url,
       headers: {
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01',
-        'Content-Type': 'application/json',
+        'Accept': 'application/json',
       },
     );
     final json = jsonDecode(body);
     final ids = <String>{};
-    if (json is Map<String, dynamic>) {
+    if (json is Map) {
       final data = json['data'];
       if (data is List) {
         for (final item in data) {
@@ -210,9 +260,8 @@ class LlmService {
       }
     }
     if (ids.isEmpty) {
-      // Older gateways may not support /models — surface a clear error.
       throw LlmException(
-        'Anthropic 模型列表为空（端点可能不支持 GET ${url.path}，请手动填写）',
+        'Anthropic 模型列表为空（GET $url 可能不受支持，请手动填写模型 ID）',
       );
     }
     final list = ids.toList()..sort();
@@ -340,73 +389,115 @@ Rules:
   /// If [baseUrl] already ends with `/chat/completions` it is used verbatim;
   /// otherwise the path is appended.
   Uri _openAiUrl(String baseUrl) {
-    final trimmed = _normalizeBaseUrl(baseUrl);
-    if (trimmed.endsWith('/chat/completions')) {
-      return Uri.parse(trimmed);
+    final base = _parseHttpBase(baseUrl);
+    final path = _joinPath(base.path, 'chat/completions');
+    return base.replace(path: path, query: '', fragment: '');
+  }
+
+  /// Candidate URLs for OpenAI-compatible model listing.
+  List<Uri> _openAiModelsCandidateUrls(String baseUrl) {
+    final base = _parseHttpBase(baseUrl);
+    var path = base.path;
+    const cc = '/chat/completions';
+    if (path.endsWith(cc)) {
+      path = path.substring(0, path.length - cc.length);
     }
-    return Uri.parse('$trimmed/chat/completions');
+    path = _trimSlashes(path);
+
+    final candidates = <Uri>[];
+    void add(String p) {
+      final u = base.replace(path: p.isEmpty ? '/' : p, query: '', fragment: '');
+      if (!candidates.any((c) => c.toString() == u.toString())) {
+        candidates.add(u);
+      }
+    }
+
+    if (path.endsWith('/models')) {
+      add(path);
+    } else {
+      add(_joinPath(path, 'models'));
+      if (!path.endsWith('/v1') && !path.contains('/v1/')) {
+        add(_joinPath(path, 'v1/models'));
+      }
+    }
+    return candidates;
   }
 
   /// `GET {base}/models` for OpenAI-compatible providers (incl. DeepSeek, etc.).
-  Uri _openAiModelsUrl(String baseUrl) {
-    var trimmed = _normalizeBaseUrl(baseUrl);
-    if (trimmed.endsWith('/chat/completions')) {
-      trimmed = trimmed.substring(
-        0,
-        trimmed.length - '/chat/completions'.length,
-      );
-      trimmed = trimmed.replaceAll(RegExp(r'/$'), '');
-    }
-    if (trimmed.endsWith('/models')) return Uri.parse(trimmed);
-    return Uri.parse('$trimmed/models');
-  }
+  Uri _openAiModelsUrl(String baseUrl) =>
+      _openAiModelsCandidateUrls(baseUrl).first;
 
   /// `GET {base}/v1/models` for Anthropic (or base already ending in /models).
   Uri _anthropicModelsUrl(String baseUrl) {
-    final trimmed = _normalizeBaseUrl(baseUrl);
-    if (trimmed.contains('/v1/models')) return Uri.parse(trimmed);
-    if (trimmed.endsWith('/models')) return Uri.parse(trimmed);
-    if (trimmed.endsWith('/v1')) return Uri.parse('$trimmed/models');
-    if (trimmed.contains('/v1/messages')) {
-      return Uri.parse(trimmed.replaceFirst('/v1/messages', '/v1/models'));
+    final base = _parseHttpBase(baseUrl);
+    var path = _trimSlashes(base.path);
+    if (path.endsWith('/messages')) {
+      path = path.substring(0, path.length - '/messages'.length);
+      path = _trimSlashes(path);
     }
-    return Uri.parse('$trimmed/v1/models');
+    if (path.endsWith('/models')) {
+      return base.replace(path: path, query: '', fragment: '');
+    }
+    if (path.endsWith('/v1') || path.contains('/v1/')) {
+      return base.replace(
+        path: _joinPath(path, 'models'),
+        query: '',
+        fragment: '',
+      );
+    }
+    return base.replace(
+      path: _joinPath(path, 'v1/models'),
+      query: '',
+      fragment: '',
+    );
   }
 
-  /// Ensure scheme + host. Users often paste `api.xxx.com/v1` without https://.
-  String _normalizeBaseUrl(String baseUrl) {
+  /// Parse user Base URL into an absolute http(s) [Uri] with host.
+  Uri _parseHttpBase(String baseUrl) {
     var s = baseUrl.trim();
-    // Strip accidental quotes / whitespace / zero-width chars.
-    s = s
-        .replaceAll(RegExp(r'^["\x27]+|["\x27]+$'), '')
-        .replaceAll(RegExp(r'[​-‍﻿]'), '')
-        .trim();
+    if ((s.startsWith('"') && s.endsWith('"')) ||
+        (s.startsWith("'") && s.endsWith("'"))) {
+      s = s.substring(1, s.length - 1).trim();
+    }
     if (s.isEmpty) {
       throw const LlmException('Base URL 为空');
     }
     if (!s.contains('://')) {
       s = 'https://$s';
     }
-    s = s.replaceAll(RegExp(r'/$'), '');
+    while (s.endsWith('/') && s.length > 'https://x'.length) {
+      s = s.substring(0, s.length - 1);
+    }
     final uri = Uri.tryParse(s);
-    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+    if (uri == null ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty) {
       throw LlmException(
-        'Base URL 无效：「$baseUrl」。请使用完整地址，例如 https://api.openai.com/v1',
+        'Base URL 无效：「$baseUrl」。\n'
+        '请使用完整地址，例如：\n'
+        '• https://api.openai.com/v1\n'
+        '• https://api.deepseek.com/v1\n'
+        '• https://api.anthropic.com',
       );
     }
-    if (uri.scheme != 'http' && uri.scheme != 'https') {
-      throw LlmException('Base URL 协议必须是 http 或 https（当前：${uri.scheme}）');
-    }
-    return s;
+    return uri;
   }
 
-  void _assertAbsoluteHttpUrl(Uri url, String originalBase) {
-    if (!url.hasScheme || url.host.isEmpty) {
-      throw LlmException(
-        '无法从 Base URL 构造请求地址（原始：「$originalBase」→ $url）。'
-        '请填写含 https:// 的完整地址，例如 https://api.openai.com/v1',
-      );
+  String _trimSlashes(String path) {
+    var p = path.trim();
+    while (p.endsWith('/') && p.length > 1) {
+      p = p.substring(0, p.length - 1);
     }
+    if (p.isEmpty) return '';
+    if (!p.startsWith('/')) p = '/$p';
+    return p;
+  }
+
+  String _joinPath(String basePath, String suffix) {
+    final a = _trimSlashes(basePath);
+    final b = suffix.replaceAll(RegExp(r'^/+'), '');
+    if (a.isEmpty || a == '/') return '/$b';
+    return '$a/$b';
   }
 
   List<Map<String, dynamic>> _toOpenAiMessages(List<ChatMessage> messages) {
@@ -523,10 +614,15 @@ Rules:
   /// it is returned verbatim; if it contains `/v1` (but not the messages
   /// segment) `/messages` is appended; otherwise `/v1/messages` is appended.
   Uri _anthropicUrl(String baseUrl) {
-    final trimmed = _normalizeBaseUrl(baseUrl);
-    if (trimmed.contains('/v1/messages')) return Uri.parse(trimmed);
-    if (trimmed.endsWith('/v1')) return Uri.parse('$trimmed/messages');
-    return Uri.parse('$trimmed/v1/messages');
+    final base = _parseHttpBase(baseUrl);
+    var path = _trimSlashes(base.path);
+    if (path.contains('/v1/messages') || path.endsWith('/messages')) {
+      return base.replace(path: path, query: '', fragment: '');
+    }
+    if (path.endsWith('/v1')) {
+      return base.replace(path: _joinPath(path, 'messages'), query: '', fragment: '');
+    }
+    return base.replace(path: _joinPath(path, 'v1/messages'), query: '', fragment: '');
   }
 
   List<Map<String, dynamic>> _toAnthropicMessages(List<ChatMessage> messages) {
