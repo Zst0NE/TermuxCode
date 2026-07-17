@@ -224,11 +224,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 decoration: const InputDecoration(
                   labelText: 'Base URL',
                   hintText: 'https://api.openai.com/v1',
+                  helperText: '须含 https:// ，例如 https://api.deepseek.com/v1',
                   prefixIcon: Icon(Icons.link),
                 ),
                 keyboardType: TextInputType.url,
-                validator: (v) =>
-                    (v == null || v.trim().isEmpty) ? '必填' : null,
+                validator: (v) {
+                  final s = (v ?? '').trim();
+                  if (s.isEmpty) return '必填';
+                  final withScheme =
+                      s.contains('://') ? s : 'https://$s';
+                  final uri = Uri.tryParse(withScheme);
+                  if (uri == null || uri.host.isEmpty) {
+                    return '地址无效，请带 https://';
+                  }
+                  return null;
+                },
                 onChanged: (_) {
                   // URL change invalidates cached list.
                   if (_modelIds.isNotEmpty) {

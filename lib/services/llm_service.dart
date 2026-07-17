@@ -88,11 +88,12 @@ class LlmService {
     required List<ChatMessage> messages,
     required String systemPrompt,
   }) async {
+    final key = _sanitizeApiKey(apiKey);
     switch (config.kind) {
       case LlmProviderKind.openai:
-        return _completeOpenAi(config, apiKey, messages, systemPrompt);
+        return _completeOpenAi(config, key, messages, systemPrompt);
       case LlmProviderKind.anthropic:
-        return _completeAnthropic(config, apiKey, messages, systemPrompt);
+        return _completeAnthropic(config, key, messages, systemPrompt);
     }
   }
 
@@ -106,12 +107,13 @@ class LlmService {
     required List<ChatMessage> messages,
     required String systemPrompt,
   }) async* {
+    final key = _sanitizeApiKey(apiKey);
     switch (config.kind) {
       case LlmProviderKind.openai:
-        yield* _streamOpenAi(config, apiKey, messages, systemPrompt);
+        yield* _streamOpenAi(config, key, messages, systemPrompt);
       case LlmProviderKind.anthropic:
         final turn =
-            await _completeAnthropic(config, apiKey, messages, systemPrompt);
+            await _completeAnthropic(config, key, messages, systemPrompt);
         if (turn.text.isNotEmpty) yield LlmTextDelta(turn.text);
         yield LlmStreamDone(turn);
     }
@@ -123,7 +125,7 @@ class LlmService {
     required LlmProviderConfig config,
     required String apiKey,
   }) async {
-    final key = apiKey.trim();
+    final key = _sanitizeApiKey(apiKey);
     if (key.isEmpty) {
       throw const LlmException('API Key 为空，无法拉取模型列表');
     }
@@ -135,8 +137,17 @@ class LlmService {
     }
   }
 
+  /// Strip whitespace/newlines that break HTTP headers (→ ArgumentError).
+  String _sanitizeApiKey(String apiKey) {
+    return apiKey
+        .trim()
+        .replaceAll(RegExp(r'[\r\n\t]'), '')
+        .replaceAll(RegExp(r'\s+'), '');
+  }
+
   Future<List<String>> _listOpenAiModels(String baseUrl, String apiKey) async {
     final url = _openAiModelsUrl(baseUrl);
+    _assertAbsoluteHttpUrl(url, baseUrl);
     final body = await _get(
       url: url,
       headers: {
@@ -166,7 +177,9 @@ class LlmService {
       }
     }
     if (ids.isEmpty) {
-      throw const LlmException('模型列表为空或响应格式无法解析');
+      throw LlmException(
+        '模型列表为空或响应格式无法解析（请求 ${url.toString()}）',
+      );
     }
     final list = ids.toList()..sort();
     return list;
@@ -174,6 +187,7 @@ class LlmService {
 
   Future<List<String>> _listAnthropicModels(String baseUrl, String apiKey) async {
     final url = _anthropicModelsUrl(baseUrl);
+    _assertAbsoluteHttpUrl(url, baseUrl);
     final body = await _get(
       url: url,
       headers: {
@@ -197,8 +211,8 @@ class LlmService {
     }
     if (ids.isEmpty) {
       // Older gateways may not support /models — surface a clear error.
-      throw const LlmException(
-        'Anthropic 模型列表为空（端点可能不支持 GET /v1/models，请手动填写）',
+      throw LlmException(
+        'Anthropic 模型列表为空（端点可能不支持 GET ${url.path}，请手动填写）',
       );
     }
     final list = ids.toList()..sort();
@@ -326,7 +340,7 @@ Rules:
   /// If [baseUrl] already ends with `/chat/completions` it is used verbatim;
   /// otherwise the path is appended.
   Uri _openAiUrl(String baseUrl) {
-    final trimmed = baseUrl.trimRight().replaceAll(RegExp(r'/$'), '');
+    final trimmed = _normalizeBaseUrl(baseUrl);
     if (trimmed.endsWith('/chat/completions')) {
       return Uri.parse(trimmed);
     }
@@ -335,7 +349,7 @@ Rules:
 
   /// `GET {base}/models` for OpenAI-compatible providers (incl. DeepSeek, etc.).
   Uri _openAiModelsUrl(String baseUrl) {
-    var trimmed = baseUrl.trimRight().replaceAll(RegExp(r'/$'), '');
+    var trimmed = _normalizeBaseUrl(baseUrl);
     if (trimmed.endsWith('/chat/completions')) {
       trimmed = trimmed.substring(
         0,
@@ -349,7 +363,7 @@ Rules:
 
   /// `GET {base}/v1/models` for Anthropic (or base already ending in /models).
   Uri _anthropicModelsUrl(String baseUrl) {
-    final trimmed = baseUrl.trimRight().replaceAll(RegExp(r'/$'), '');
+    final trimmed = _normalizeBaseUrl(baseUrl);
     if (trimmed.contains('/v1/models')) return Uri.parse(trimmed);
     if (trimmed.endsWith('/models')) return Uri.parse(trimmed);
     if (trimmed.endsWith('/v1')) return Uri.parse('$trimmed/models');
@@ -357,6 +371,42 @@ Rules:
       return Uri.parse(trimmed.replaceFirst('/v1/messages', '/v1/models'));
     }
     return Uri.parse('$trimmed/v1/models');
+  }
+
+  /// Ensure scheme + host. Users often paste `api.xxx.com/v1` without https://.
+  String _normalizeBaseUrl(String baseUrl) {
+    var s = baseUrl.trim();
+    // Strip accidental quotes / whitespace / zero-width chars.
+    s = s
+        .replaceAll(RegExp(r'^["\x27]+|["\x27]+$'), '')
+        .replaceAll(RegExp(r'[​-‍﻿]'), '')
+        .trim();
+    if (s.isEmpty) {
+      throw const LlmException('Base URL 为空');
+    }
+    if (!s.contains('://')) {
+      s = 'https://$s';
+    }
+    s = s.replaceAll(RegExp(r'/$'), '');
+    final uri = Uri.tryParse(s);
+    if (uri == null || !uri.hasScheme || uri.host.isEmpty) {
+      throw LlmException(
+        'Base URL 无效：「$baseUrl」。请使用完整地址，例如 https://api.openai.com/v1',
+      );
+    }
+    if (uri.scheme != 'http' && uri.scheme != 'https') {
+      throw LlmException('Base URL 协议必须是 http 或 https（当前：${uri.scheme}）');
+    }
+    return s;
+  }
+
+  void _assertAbsoluteHttpUrl(Uri url, String originalBase) {
+    if (!url.hasScheme || url.host.isEmpty) {
+      throw LlmException(
+        '无法从 Base URL 构造请求地址（原始：「$originalBase」→ $url）。'
+        '请填写含 https:// 的完整地址，例如 https://api.openai.com/v1',
+      );
+    }
   }
 
   List<Map<String, dynamic>> _toOpenAiMessages(List<ChatMessage> messages) {
@@ -473,7 +523,7 @@ Rules:
   /// it is returned verbatim; if it contains `/v1` (but not the messages
   /// segment) `/messages` is appended; otherwise `/v1/messages` is appended.
   Uri _anthropicUrl(String baseUrl) {
-    final trimmed = baseUrl.trimRight().replaceAll(RegExp(r'/$'), '');
+    final trimmed = _normalizeBaseUrl(baseUrl);
     if (trimmed.contains('/v1/messages')) return Uri.parse(trimmed);
     if (trimmed.endsWith('/v1')) return Uri.parse('$trimmed/messages');
     return Uri.parse('$trimmed/v1/messages');
@@ -682,10 +732,18 @@ Rules:
     try {
       response = await _http.get(url, headers: headers).timeout(timeout);
     } on TimeoutException {
-      throw LlmException('请求超时（${timeout.inSeconds}s）: ${url.host}');
-    } catch (e) {
       throw LlmException(
-        'Network error contacting ${url.host}: ${e.runtimeType}',
+        '请求超时（${timeout.inSeconds}s）: ${url.host}${url.path}',
+      );
+    } on ArgumentError catch (e) {
+      // Often invalid URI (no host) or illegal header characters in the key.
+      throw LlmException(
+        '请求参数无效（${url.isAbsolute ? url.toString() : "非绝对URL"}）: $e',
+      );
+    } catch (e) {
+      final host = url.host.isEmpty ? url.toString() : url.host;
+      throw LlmException(
+        '网络错误（$host）: ${e.runtimeType} — $e',
       );
     }
     return _ensureOk(response, url);
@@ -703,9 +761,16 @@ Rules:
           .post(url, headers: headers, body: body)
           .timeout(timeout);
     } on TimeoutException {
-      throw LlmException('请求超时（${timeout.inSeconds}s）: ${url.host}');
+      throw LlmException(
+        '请求超时（${timeout.inSeconds}s）: ${url.host}${url.path}',
+      );
+    } on ArgumentError catch (e) {
+      throw LlmException(
+        '请求参数无效（${url.isAbsolute ? url.toString() : "非绝对URL"}）: $e',
+      );
     } catch (e) {
-      throw LlmException('Network error contacting ${url.host}: ${e.runtimeType}');
+      final host = url.host.isEmpty ? url.toString() : url.host;
+      throw LlmException('网络错误（$host）: ${e.runtimeType}');
     }
     return _ensureOk(response, url);
   }
