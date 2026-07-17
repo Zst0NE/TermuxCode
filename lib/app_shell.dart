@@ -8,7 +8,9 @@ import 'screens/profiles_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/terminal_screen.dart';
 
-/// Bottom-nav host for the four primary surfaces.
+/// Chat-first shell (Doubao / Claude App style).
+///
+/// Tabs: 对话 (home) · 服务器 · 终端(高级) · 设置
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
 
@@ -17,9 +19,12 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> {
+  /// 0 = 对话 (default home)
   int _index = 0;
 
-  static const _titles = ['连接', '终端', 'Agent', '设置'];
+  static const _titles = ['对话', '服务器', '终端', '设置'];
+
+  void goToServers() => setState(() => _index = 1);
 
   @override
   Widget build(BuildContext context) {
@@ -28,37 +33,38 @@ class _AppShellState extends State<AppShell> {
     final connecting = session.isConnecting;
     final cs = Theme.of(context).colorScheme;
 
+    // Chat-first page order
     final pages = <Widget>[
+      ChatScreen(onOpenServers: goToServers),
       const ProfilesScreen(),
       const TerminalScreen(),
-      const ChatScreen(),
       const SettingsScreen(),
     ];
 
     return Scaffold(
       body: Column(
         children: [
-          // Global session strip — visible on every tab.
+          // Compact host status — secondary to chat, not a heavy ops bar.
           Material(
             color: connected
                 ? const Color(0xFF0D2A22)
                 : connecting
                     ? const Color(0xFF2A2410)
-                    : const Color(0xFF1A1F1D),
+                    : cs.surfaceContainerHighest.withValues(alpha: 0.35),
             child: SafeArea(
               bottom: false,
               child: Padding(
                 padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 child: Row(
                   children: [
                     Icon(
                       connected
-                          ? Icons.cloud_done
+                          ? Icons.cloud_done_rounded
                           : connecting
-                              ? Icons.cloud_sync
-                              : Icons.cloud_off,
-                      size: 18,
+                              ? Icons.cloud_sync_rounded
+                              : Icons.cloud_off_rounded,
+                      size: 16,
                       color: connected
                           ? const Color(0xFF00E5A0)
                           : connecting
@@ -69,14 +75,14 @@ class _AppShellState extends State<AppShell> {
                     Expanded(
                       child: Text(
                         connected
-                            ? '已连接 · ${session.activeProfileLabel ?? "SSH"}'
+                            ? '远程主机 · ${session.activeProfileLabel ?? "已连接"}'
                             : connecting
-                                ? '正在连接…'
+                                ? '正在连接远程主机…'
                                 : session.error != null
-                                    ? '连接异常 · 点「连接」重试'
-                                    : '未连接 · TermuxCode',
+                                    ? '主机连接失败'
+                                    : '未连接远程主机 · AI 可先聊天',
                         style: TextStyle(
-                          fontSize: 13,
+                          fontSize: 12,
                           fontWeight: FontWeight.w500,
                           color: connected
                               ? const Color(0xFF00E5A0)
@@ -93,8 +99,9 @@ class _AppShellState extends State<AppShell> {
                         style: TextButton.styleFrom(
                           foregroundColor: cs.error,
                           visualDensity: VisualDensity.compact,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
-                        child: const Text('断开'),
+                        child: const Text('断开', style: TextStyle(fontSize: 12)),
                       )
                     else if (!connecting && session.lastProfile != null)
                       TextButton(
@@ -114,17 +121,22 @@ class _AppShellState extends State<AppShell> {
                         style: TextButton.styleFrom(
                           foregroundColor: const Color(0xFF00E5A0),
                           visualDensity: VisualDensity.compact,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
-                        child: Text('重连 ${session.lastProfile!.label}'),
+                        child: Text(
+                          '重连',
+                          style: const TextStyle(fontSize: 12),
+                        ),
                       )
                     else if (!connecting)
                       TextButton(
-                        onPressed: () => setState(() => _index = 0),
+                        onPressed: goToServers,
                         style: TextButton.styleFrom(
                           foregroundColor: const Color(0xFF00E5A0),
                           visualDensity: VisualDensity.compact,
+                          tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                         ),
-                        child: const Text('去连接'),
+                        child: const Text('配置主机', style: TextStyle(fontSize: 12)),
                       ),
                   ],
                 ),
@@ -134,13 +146,14 @@ class _AppShellState extends State<AppShell> {
           if (session.error != null &&
               session.state == SshConnectionState.error)
             Material(
-              color: cs.errorContainer,
+              color: cs.errorContainer.withValues(alpha: 0.9),
               child: Padding(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 child: Row(
                   children: [
-                    Icon(Icons.error_outline, size: 16, color: cs.onErrorContainer),
+                    Icon(Icons.error_outline,
+                        size: 16, color: cs.onErrorContainer),
                     const SizedBox(width: 8),
                     Expanded(
                       child: Text(
@@ -153,12 +166,18 @@ class _AppShellState extends State<AppShell> {
                         ),
                       ),
                     ),
+                    TextButton(
+                      onPressed: goToServers,
+                      style: TextButton.styleFrom(
+                        foregroundColor: cs.onErrorContainer,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      child: const Text('去处理'),
+                    ),
                     IconButton(
-                      icon: Icon(Icons.close, size: 16, color: cs.onErrorContainer),
-                      onPressed: () {
-                        // clear by reconnecting state via disconnect noop path
-                        session.disconnect();
-                      },
+                      icon: Icon(Icons.close,
+                          size: 16, color: cs.onErrorContainer),
+                      onPressed: () => session.disconnect(),
                       visualDensity: VisualDensity.compact,
                     ),
                   ],
@@ -173,8 +192,8 @@ class _AppShellState extends State<AppShell> {
         onDestinationSelected: (i) => setState(() => _index = i),
         destinations: [
           NavigationDestination(
-            icon: const Icon(Icons.dns_outlined),
-            selectedIcon: const Icon(Icons.dns),
+            icon: const Icon(Icons.chat_bubble_outline_rounded),
+            selectedIcon: const Icon(Icons.chat_bubble_rounded),
             label: _titles[0],
           ),
           NavigationDestination(
@@ -182,19 +201,19 @@ class _AppShellState extends State<AppShell> {
               isLabelVisible: connected,
               smallSize: 8,
               backgroundColor: const Color(0xFF00E5A0),
-              child: const Icon(Icons.terminal_outlined),
+              child: const Icon(Icons.dns_outlined),
             ),
             selectedIcon: Badge(
               isLabelVisible: connected,
               smallSize: 8,
               backgroundColor: const Color(0xFF00E5A0),
-              child: const Icon(Icons.terminal),
+              child: const Icon(Icons.dns),
             ),
             label: _titles[1],
           ),
           NavigationDestination(
-            icon: const Icon(Icons.smart_toy_outlined),
-            selectedIcon: const Icon(Icons.smart_toy),
+            icon: const Icon(Icons.terminal_outlined),
+            selectedIcon: const Icon(Icons.terminal),
             label: _titles[2],
           ),
           NavigationDestination(

@@ -16,7 +16,7 @@ class ProfilesScreen extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('SSH 主机'),
+        title: const Text('我的服务器'),
         actions: [
           IconButton(
             icon: const Icon(Icons.add),
@@ -216,7 +216,7 @@ class _EmptyProfiles extends StatelessWidget {
           children: [
             Icon(Icons.dns_outlined, size: 72, color: cs.outline),
             const SizedBox(height: 16),
-            Text('还没有 SSH 主机', style: Theme.of(context).textTheme.titleMedium?.copyWith(color: cs.onSurfaceVariant)),
+            Text('还没有服务器', style: Theme.of(context).textTheme.titleMedium?.copyWith(color: cs.onSurfaceVariant)),
             const SizedBox(height: 8),
             Text('点击右上角 + 添加第一台远程主机', style: TextStyle(color: cs.outline, fontSize: 13), textAlign: TextAlign.center),
             const SizedBox(height: 20),
@@ -375,7 +375,7 @@ class _ProfileFormSheetState extends State<_ProfileFormSheet> {
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                widget.existing == null ? '添加 SSH 主机' : '编辑 SSH 主机',
+                widget.existing == null ? '添加服务器' : '编辑服务器',
                 style: Theme.of(context).textTheme.titleLarge,
               ),
               const SizedBox(height: 16),

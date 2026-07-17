@@ -9,8 +9,13 @@ import '../providers/settings_provider.dart';
 import '../widgets/message_bubble.dart';
 import '../widgets/remote_cli_bar.dart';
 
+/// Primary surface: Doubao / Claude App style conversation.
+/// AI can run commands on the user's remote host (SSH) with approval.
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key});
+  const ChatScreen({super.key, this.onOpenServers});
+
+  /// Jump to server list (configured by [AppShell]).
+  final VoidCallback? onOpenServers;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -19,12 +24,15 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _inputCtrl = TextEditingController();
   final _scrollCtrl = ScrollController();
+  final _focus = FocusNode();
   bool _wasConnected = false;
+  bool _showAdvanced = false;
 
   @override
   void dispose() {
     _inputCtrl.dispose();
     _scrollCtrl.dispose();
+    _focus.dispose();
     super.dispose();
   }
 
@@ -33,7 +41,7 @@ class _ChatScreenState extends State<ChatScreen> {
       if (_scrollCtrl.hasClients) {
         _scrollCtrl.animateTo(
           _scrollCtrl.position.maxScrollExtent,
-          duration: const Duration(milliseconds: 200),
+          duration: const Duration(milliseconds: 220),
           curve: Curves.easeOut,
         );
       }
@@ -62,90 +70,156 @@ class _ChatScreenState extends State<ChatScreen> {
     final cs = Theme.of(context).colorScheme;
 
     _syncRemoteCliOnConnect(session, chat);
-
     if (chat.messages.isNotEmpty) _scrollToBottom();
 
     final needsSsh = chat.mode != AgentMode.chat;
-    // Built-in agent needs API key; /cli path only needs SSH (handled in onSend).
     final canSend = !chat.isBusy &&
         (session.isConnected ||
             (settings.isConfigured && chat.mode == AgentMode.chat));
 
     return Scaffold(
+      backgroundColor: const Color(0xFF0B0F0E),
       appBar: AppBar(
-        title: const Text('TermuxCode'),
+        backgroundColor: const Color(0xFF0B0F0E),
+        titleSpacing: 16,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'TermuxCode',
+              style: TextStyle(fontWeight: FontWeight.w600, fontSize: 18),
+            ),
+            Text(
+              session.isConnected
+                  ? '可在 ${session.activeProfileLabel ?? "远程主机"} 上执行命令'
+                  : '对话式 AI · 连接主机后可远程执行',
+              style: TextStyle(
+                fontSize: 11,
+                color: cs.onSurfaceVariant,
+                fontWeight: FontWeight.w400,
+              ),
+            ),
+          ],
+        ),
         actions: [
+          // Soft mode menu (Claude/Codex capability without ops UI clutter)
+          PopupMenuButton<AgentMode>(
+            tooltip: '能力模式',
+            initialValue: chat.mode,
+            onSelected: chat.isBusy ? null : chat.setMode,
+            itemBuilder: (ctx) => [
+              for (final m in AgentMode.values)
+                PopupMenuItem(
+                  value: m,
+                  child: ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(
+                      m == AgentMode.chat
+                          ? Icons.chat_outlined
+                          : m == AgentMode.plan
+                              ? Icons.map_outlined
+                              : Icons.construction_outlined,
+                      size: 20,
+                    ),
+                    title: Text(m.label),
+                    subtitle: Text(
+                      m.descriptionZh,
+                      style: const TextStyle(fontSize: 11),
+                    ),
+                    trailing: chat.mode == m
+                        ? Icon(Icons.check, color: cs.primary, size: 18)
+                        : null,
+                  ),
+                ),
+            ],
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              child: Chip(
+                visualDensity: VisualDensity.compact,
+                label: Text(chat.mode.label, style: const TextStyle(fontSize: 12)),
+                avatar: Icon(
+                  chat.mode == AgentMode.build
+                      ? Icons.bolt
+                      : Icons.psychology_outlined,
+                  size: 16,
+                ),
+              ),
+            ),
+          ),
           IconButton(
-            tooltip: '探测远端 CLI',
-            onPressed: chat.isBusy || !session.isConnected
-                ? null
-                : () async {
-                    await chat.remoteCli.detect();
-                    if (!context.mounted) return;
-                    final avail = chat.remoteCli.available;
-                    final text = avail.isEmpty
-                        ? '未检测到 opencode / claude / codex'
-                        : avail.entries
-                            .map((e) => '${e.key.label}: ${e.value}')
-                            .join('\n');
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text(text)),
-                    );
-                  },
-            icon: const Icon(Icons.dns_outlined),
+            tooltip: _showAdvanced ? '收起高级' : '高级（CLI）',
+            onPressed: () => setState(() => _showAdvanced = !_showAdvanced),
+            icon: Icon(
+              _showAdvanced ? Icons.expand_less : Icons.tune,
+              size: 22,
+            ),
           ),
           if (chat.messages.isNotEmpty)
             IconButton(
-              icon: const Icon(Icons.delete_sweep_outlined),
-              tooltip: '清空对话',
+              icon: const Icon(Icons.add_comment_outlined),
+              tooltip: '新对话',
               onPressed: chat.isBusy ? null : () => chat.clearMessages(),
             ),
         ],
       ),
       body: Column(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-            child: SegmentedButton<AgentMode>(
-              segments: [
-                for (final m in AgentMode.values)
-                  ButtonSegment(
-                    value: m,
-                    label: Text(m.label),
-                    tooltip: m.descriptionZh,
-                  ),
-              ],
-              selected: {chat.mode},
-              onSelectionChanged:
-                  chat.isBusy ? null : (s) => chat.setMode(s.first),
-            ),
-          ),
           if (needsSsh && !session.isConnected)
-            _Banner(
-              icon: Icons.link_off,
-              message: '未连接 SSH — Plan/Build 需要主机（Chat 可纯对话）',
-              color: cs.errorContainer,
-              textColor: cs.onErrorContainer,
+            _SoftBanner(
+              icon: Icons.link_off_rounded,
+              message: '连接你的服务器后，我才能在上面执行命令',
+              actionLabel: '去配置',
+              onAction: widget.onOpenServers,
+              color: cs.surfaceContainerHighest,
+              textColor: cs.onSurfaceVariant,
             ),
           if (!settings.isConfigured)
-            _Banner(
-              icon: Icons.key_off_outlined,
-              message: '未配置 API Key，请前往设置（内置 Agent 需要；/cli 仅需 SSH）',
-              color: cs.tertiaryContainer,
-              textColor: cs.onTertiaryContainer,
+            _SoftBanner(
+              icon: Icons.key_outlined,
+              message: '配置 API Key 后开始对话（BYOK）',
+              actionLabel: '设置',
+              onAction: null, // user uses bottom tab
+              color: cs.surfaceContainerHighest,
+              textColor: cs.onSurfaceVariant,
             ),
-          const RemoteCliBar(),
+          if (_showAdvanced) const RemoteCliBar(),
           Expanded(
             child: chat.messages.isEmpty
-                ? _EmptyChat(cs: cs, mode: chat.mode)
+                ? _EmptyChat(
+                    cs: cs,
+                    mode: chat.mode,
+                    onOpenServers: widget.onOpenServers,
+                    onQuick: (prompt) {
+                      if (prompt == '/cli') {
+                        if (!session.isConnected) {
+                          widget.onOpenServers?.call();
+                          return;
+                        }
+                        chat.remoteCli.detect();
+                        return;
+                      }
+                      if (!settings.isConfigured) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('请先在设置里填写 API Key')),
+                        );
+                        return;
+                      }
+                      if (needsSsh && !session.isConnected) {
+                        widget.onOpenServers?.call();
+                        return;
+                      }
+                      chat.sendMessage(prompt);
+                    },
+                  )
                 : ListView.builder(
                     controller: _scrollCtrl,
-                    padding: const EdgeInsets.all(12),
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
                     itemCount: chat.messages.length,
                     itemBuilder: (context, i) {
                       final msg = chat.messages[i];
                       return Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
+                        padding: const EdgeInsets.only(bottom: 10),
                         child: MessageBubble(
                           message: msg,
                           onApprove: msg.role == ChatRole.assistant
@@ -169,140 +243,213 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
           if (chat.isBusy)
             LinearProgressIndicator(
+              minHeight: 2,
               backgroundColor: cs.surfaceContainerHighest,
               color: cs.primary,
             ),
-          _InputBar(
+          _Composer(
             controller: _inputCtrl,
+            focusNode: _focus,
             canSend: canSend,
-            onSend: () {
-              final text = _inputCtrl.text.trim();
-              if (text.isEmpty) return;
-              _inputCtrl.clear();
-              // /cli ... → host OpenCode/Claude/Codex (no local API key required)
-              if (text == '/cli' || text.startsWith('/cli ')) {
-                if (text == '/cli') {
-                  chat.remoteCli.detect().then((_) {
-                    if (!context.mounted) return;
-                    final avail = chat.remoteCli.available;
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          avail.isEmpty
-                              ? '未检测到远端 CLI'
-                              : '可用: ${avail.keys.map((k) => k.label).join(", ")}'
-                                  '${chat.remoteCli.selected != null ? " · 当前 ${chat.remoteCli.selected!.label}" : ""}',
-                        ),
-                      ),
-                    );
-                  });
-                } else {
-                  chat.runRemoteCli(text.substring(5));
-                }
-                return;
-              }
-              if (!settings.isConfigured) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('内置 Agent 需要 API Key，或改用 /cli 调远端 CLI')),
-                );
-                return;
-              }
-              if (needsSsh && !session.isConnected) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Plan/Build 需要先连接 SSH')),
-                );
-                return;
-              }
-              chat.sendMessage(text);
-            },
+            hint: session.isConnected
+                ? '有什么可以帮你的？可让我在远程主机上执行…'
+                : '先聊聊，或配置主机后让我远程执行命令…',
+            onSend: () => _handleSend(chat, session, settings, needsSsh),
           ),
         ],
+      ),
+    );
+  }
+
+  void _handleSend(
+    ChatProvider chat,
+    SessionProvider session,
+    SettingsProvider settings,
+    bool needsSsh,
+  ) {
+    final text = _inputCtrl.text.trim();
+    if (text.isEmpty) return;
+    _inputCtrl.clear();
+
+    if (text == '/cli' || text.startsWith('/cli ')) {
+      if (text == '/cli') {
+        if (!session.isConnected) {
+          widget.onOpenServers?.call();
+          return;
+        }
+        chat.remoteCli.detect().then((_) {
+          if (!mounted) return;
+          final avail = chat.remoteCli.available;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                avail.isEmpty
+                    ? '未检测到远端 CLI'
+                    : '可用: ${avail.keys.map((k) => k.label).join(", ")}',
+              ),
+            ),
+          );
+        });
+      } else {
+        chat.runRemoteCli(text.substring(5));
+      }
+      return;
+    }
+
+    if (!settings.isConfigured) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先在设置配置 API Key')),
+      );
+      return;
+    }
+    if (needsSsh && !session.isConnected) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('执行命令需要先连接你的服务器'),
+          action: SnackBarAction(
+            label: '去配置',
+            onPressed: () => widget.onOpenServers?.call(),
+          ),
+        ),
+      );
+      return;
+    }
+    chat.sendMessage(text);
+  }
+}
+
+class _SoftBanner extends StatelessWidget {
+  const _SoftBanner({
+    required this.icon,
+    required this.message,
+    required this.color,
+    required this.textColor,
+    this.actionLabel,
+    this.onAction,
+  });
+
+  final IconData icon;
+  final String message;
+  final Color color;
+  final Color textColor;
+  final String? actionLabel;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: color,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        child: Row(
+          children: [
+            Icon(icon, size: 16, color: textColor),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                message,
+                style: TextStyle(color: textColor, fontSize: 12.5),
+              ),
+            ),
+            if (actionLabel != null && onAction != null)
+              TextButton(
+                onPressed: onAction,
+                style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFF00E5A0),
+                  visualDensity: VisualDensity.compact,
+                ),
+                child: Text(actionLabel!, style: const TextStyle(fontSize: 12)),
+              ),
+          ],
+        ),
       ),
     );
   }
 }
 
 class _EmptyChat extends StatelessWidget {
-  const _EmptyChat({required this.cs, required this.mode});
+  const _EmptyChat({
+    required this.cs,
+    required this.mode,
+    required this.onQuick,
+    this.onOpenServers,
+  });
+
   final ColorScheme cs;
   final AgentMode mode;
+  final void Function(String prompt) onQuick;
+  final VoidCallback? onOpenServers;
 
-  static const _quick = <(String, String)>[
-    ('磁盘占用', '查看磁盘使用情况并给出清理建议'),
-    ('系统信息', '汇总 uname、内存、磁盘与当前用户'),
-    ('最近日志', '找出系统里最可能的错误日志并摘要'),
-    ('/cli 探测', '/cli'),
+  static const _quick = <(String, String, IconData)>[
+    ('看看磁盘', '查看磁盘使用情况并用通俗语言解释', Icons.storage_outlined),
+    ('系统概况', '用简洁中文汇总系统、内存、磁盘和当前用户', Icons.computer_outlined),
+    ('帮我排查', '帮我找出最可能的问题日志并给出下一步', Icons.troubleshoot_outlined),
+    ('配置主机', '__servers__', Icons.dns_outlined),
   ];
 
   @override
   Widget build(BuildContext context) {
-    final chat = context.read<ChatProvider>();
-    final session = context.watch<SessionProvider>();
-    final settings = context.watch<SettingsProvider>();
-
     return Center(
       child: SingleChildScrollView(
-        padding: const EdgeInsets.all(28),
+        padding: const EdgeInsets.fromLTRB(24, 12, 24, 24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.smart_toy_outlined, size: 64, color: cs.outline),
-            const SizedBox(height: 12),
+            Container(
+              width: 72,
+              height: 72,
+              decoration: BoxDecoration(
+                color: const Color(0xFF00E5A0).withValues(alpha: 0.12),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.auto_awesome,
+                size: 36,
+                color: Color(0xFF00E5A0),
+              ),
+            ),
+            const SizedBox(height: 16),
             Text(
-              'TermuxCode Agent',
-              style: Theme.of(context)
-                  .textTheme
-                  .titleMedium
-                  ?.copyWith(color: cs.onSurfaceVariant),
+              '你好，我是 TermuxCode',
+              style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
             Text(
-              '${mode.label}：${mode.descriptionZh}\n'
-              'Chat / Plan / Build 可在上方切换\n'
-              '远端 CLI：连接后自动探测，或 /cli 你的任务',
-              style: TextStyle(color: cs.outline, fontSize: 13),
+              '像豆包 / Claude 一样对话。\n'
+              '连上你的服务器后，我可以在上面执行命令（需你确认）。',
+              style: TextStyle(
+                color: cs.onSurfaceVariant,
+                fontSize: 14,
+                height: 1.45,
+              ),
               textAlign: TextAlign.center,
             ),
-            const SizedBox(height: 18),
+            const SizedBox(height: 6),
+            Text(
+              '当前能力：${mode.label} · ${mode.descriptionZh}',
+              style: TextStyle(color: cs.outline, fontSize: 12),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 22),
             Wrap(
-              spacing: 8,
-              runSpacing: 8,
+              spacing: 10,
+              runSpacing: 10,
               alignment: WrapAlignment.center,
               children: [
-                for (final (label, prompt) in _quick)
+                for (final (label, prompt, icon) in _quick)
                   ActionChip(
-                    label: Text(label, style: const TextStyle(fontSize: 12)),
-                    onPressed: chat.isBusy
-                        ? null
-                        : () {
-                            if (prompt == '/cli') {
-                              if (!session.isConnected) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('请先连接 SSH')),
-                                );
-                                return;
-                              }
-                              chat.remoteCli.detect();
-                              return;
-                            }
-                            if (!settings.isConfigured) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('请先在设置填写 API Key，或改用 /cli'),
-                                ),
-                              );
-                              return;
-                            }
-                            if (mode != AgentMode.chat &&
-                                !session.isConnected) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(content: Text('Plan/Build 需要先连接 SSH')),
-                              );
-                              return;
-                            }
-                            chat.sendMessage(prompt);
-                          },
+                    avatar: Icon(icon, size: 16),
+                    label: Text(label),
+                    onPressed: () {
+                      if (prompt == '__servers__') {
+                        onOpenServers?.call();
+                        return;
+                      }
+                      onQuick(prompt);
+                    },
                   ),
               ],
             ),
@@ -313,97 +460,81 @@ class _EmptyChat extends StatelessWidget {
   }
 }
 
-class _Banner extends StatelessWidget {
-  const _Banner({
-    required this.icon,
-    required this.message,
-    required this.color,
-    required this.textColor,
-  });
-  final IconData icon;
-  final String message;
-  final Color color;
-  final Color textColor;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      color: color,
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        children: [
-          Icon(icon, size: 16, color: textColor),
-          const SizedBox(width: 8),
-          Expanded(
-            child:
-                Text(message, style: TextStyle(color: textColor, fontSize: 13)),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _InputBar extends StatelessWidget {
-  const _InputBar({
+class _Composer extends StatelessWidget {
+  const _Composer({
     required this.controller,
+    required this.focusNode,
     required this.canSend,
     required this.onSend,
+    required this.hint,
   });
+
   final TextEditingController controller;
+  final FocusNode focusNode;
   final bool canSend;
   final VoidCallback onSend;
+  final String hint;
 
   @override
   Widget build(BuildContext context) {
+    final bottom = MediaQuery.viewInsetsOf(context).bottom;
     final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: EdgeInsets.only(
-        left: 12,
-        right: 8,
-        top: 8,
-        bottom: MediaQuery.viewInsetsOf(context).bottom + 8,
-      ),
-      decoration: BoxDecoration(
-        color: cs.surfaceContainerHigh,
-        border: Border(
-          top: BorderSide(color: cs.outlineVariant.withValues(alpha: 0.3)),
-        ),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: TextField(
-              controller: controller,
-              minLines: 1,
-              maxLines: 4,
-              textInputAction: TextInputAction.send,
-              onSubmitted: canSend ? (_) => onSend() : null,
-              decoration: InputDecoration(
-                hintText: '描述任务，例如：查看磁盘占用并给出建议',
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
-                  borderSide: BorderSide.none,
+
+    return Material(
+      color: const Color(0xFF101615),
+      elevation: 8,
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(12, 10, 12, bottom + 12),
+        child: SafeArea(
+          top: false,
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: controller,
+                  focusNode: focusNode,
+                  minLines: 1,
+                  maxLines: 5,
+                  textInputAction: TextInputAction.newline,
+                  style: const TextStyle(fontSize: 15, height: 1.35),
+                  decoration: InputDecoration(
+                    hintText: hint,
+                    hintStyle: TextStyle(
+                      color: cs.onSurfaceVariant.withValues(alpha: 0.75),
+                      fontSize: 14,
+                    ),
+                    filled: true,
+                    fillColor: const Color(0xFF1A2220),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 12,
+                    ),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(22),
+                      borderSide: BorderSide.none,
+                    ),
+                  ),
                 ),
-                filled: true,
-                fillColor: cs.surfaceContainerHighest,
-                contentPadding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
               ),
-            ),
+              const SizedBox(width: 8),
+              Padding(
+                padding: const EdgeInsets.only(bottom: 2),
+                child: FilledButton(
+                  onPressed: canSend ? onSend : null,
+                  style: FilledButton.styleFrom(
+                    shape: const CircleBorder(),
+                    padding: const EdgeInsets.all(14),
+                    backgroundColor: const Color(0xFF00E5A0),
+                    foregroundColor: const Color(0xFF042018),
+                    disabledBackgroundColor: cs.surfaceContainerHighest,
+                  ),
+                  child: const Icon(Icons.arrow_upward_rounded, size: 22),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 6),
-          IconButton.filled(
-            onPressed: canSend ? onSend : null,
-            icon: const Icon(Icons.send),
-            style: IconButton.styleFrom(
-              backgroundColor:
-                  canSend ? cs.primary : cs.surfaceContainerHighest,
-              foregroundColor: canSend ? cs.onPrimary : cs.outline,
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }

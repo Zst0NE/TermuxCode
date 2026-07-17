@@ -1,8 +1,8 @@
 # TermuxCode
 
-**Mobile control plane for AI coding agents** — Flutter client for Android.
-
-Remote-first: connect over SSH, drive a real terminal, and run an on-device **Agent Harness** (Chat / Plan / Build) with command approval. Roadmap: wrap host-side **OpenCode / Claude Code / Codex** CLIs and optional **local Termux** as another execution host.
+**TermuxCode** is a **chat-first AI app** (Doubao / Claude App style).  
+Talk naturally; when needed the AI runs commands on **your** remote server/container over SSH (with approval).  
+Not a classic SSH client first — a conversation product with remote execution superpowers.
 
 [![Release](https://img.shields.io/github/v/release/Zst0NE/TermuxCode)](https://github.com/Zst0NE/TermuxCode/releases)
 [![License](https://img.shields.io/badge/license-personal-lightgrey)](#license)
