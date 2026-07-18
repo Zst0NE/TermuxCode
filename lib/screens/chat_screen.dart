@@ -12,10 +12,17 @@ import '../widgets/remote_cli_bar.dart';
 /// Primary surface: Doubao / Claude App style conversation.
 /// AI can run commands on the user's remote host (SSH) with approval.
 class ChatScreen extends StatefulWidget {
-  const ChatScreen({super.key, this.onOpenServers});
+  const ChatScreen({
+    super.key,
+    this.onOpenServers,
+    this.onOpenSettings,
+  });
 
   /// Jump to server list (configured by [AppShell]).
   final VoidCallback? onOpenServers;
+
+  /// Jump to settings tab.
+  final VoidCallback? onOpenSettings;
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -238,7 +245,7 @@ class _ChatScreenState extends State<ChatScreen> {
               icon: Icons.key_outlined,
               message: '内置 Agent 需要 API Key；有远程 Claude/Codex 可切到「远程」',
               actionLabel: '设置',
-              onAction: null,
+              onAction: widget.onOpenSettings,
               color: cs.surfaceContainerHighest,
               textColor: cs.onSurfaceVariant,
             ),
@@ -387,6 +394,9 @@ class _ChatScreenState extends State<ChatScreen> {
                                   }
                                 }
                               : null,
+                          onCopy: (text) {
+                            // copy handled inside bubble with snackbar
+                          },
                         ),
                       );
                     },

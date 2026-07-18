@@ -7,7 +7,10 @@ import '../models/ssh_profile.dart';
 import '../models/ssh_connection_state.dart';
 
 class ProfilesScreen extends StatelessWidget {
-  const ProfilesScreen({super.key});
+  const ProfilesScreen({super.key, this.onConnected});
+
+  /// Called after a successful SSH connect (e.g. jump back to chat).
+  final VoidCallback? onConnected;
 
   @override
   Widget build(BuildContext context) {
@@ -160,6 +163,20 @@ class ProfilesScreen extends StatelessWidget {
               false;
         },
       );
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('已连接 ${profile.label}，可以回去对话了'),
+          action: onConnected == null
+              ? null
+              : SnackBarAction(
+                  label: '去对话',
+                  onPressed: onConnected!,
+                ),
+        ),
+      );
+      // Auto jump back to chat after short delay feel.
+      onConnected?.call();
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

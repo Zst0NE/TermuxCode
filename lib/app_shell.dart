@@ -25,6 +25,8 @@ class _AppShellState extends State<AppShell> {
   static const _titles = ['对话', '服务器', '终端', '设置'];
 
   void goToServers() => setState(() => _index = 1);
+  void goToChat() => setState(() => _index = 0);
+  void goToSettings() => setState(() => _index = 3);
 
   @override
   Widget build(BuildContext context) {
@@ -35,8 +37,11 @@ class _AppShellState extends State<AppShell> {
 
     // Chat-first page order
     final pages = <Widget>[
-      ChatScreen(onOpenServers: goToServers),
-      const ProfilesScreen(),
+      ChatScreen(
+        onOpenServers: goToServers,
+        onOpenSettings: goToSettings,
+      ),
+      ProfilesScreen(onConnected: goToChat),
       const TerminalScreen(),
       const SettingsScreen(),
     ];
