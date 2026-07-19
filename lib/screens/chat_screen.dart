@@ -80,10 +80,12 @@ class _ChatScreenState extends State<ChatScreen> {
     _syncRemoteCliOnConnect(session, chat);
     if (chat.messages.isNotEmpty) _scrollToBottom();
 
+    // Send when: not busy, and (remote+connected) or (builtin+hasKey)
+    // Pure chat without SSH is allowed for builtin + API key.
     final canSend = !chat.isBusy &&
-        session.isConnected &&
-        (chat.backend == AgentBackend.remoteNative ||
-            settings.isConfigured);
+        (chat.backend == AgentBackend.remoteNative
+            ? session.isConnected
+            : settings.isConfigured);
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0F0E),
@@ -456,20 +458,35 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
-    if (!settings.isConfigured) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('请先在设置配置 API Key')),
-      );
+    // Remote backend: only need SSH (host runs Claude/Codex/OpenCode).
+    if (chat.backend == AgentBackend.remoteNative) {
+      if (!session.isConnected) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('远程 Agent 需要先连接服务器'),
+            action: SnackBarAction(
+              label: '去配置',
+              onPressed: () => widget.onOpenServers?.call(),
+            ),
+          ),
+        );
+        return;
+      }
+      chat.sendMessage(text);
       return;
     }
-    if (!session.isConnected) {
+
+    // Builtin: need API key; SSH optional (pure chat without tools).
+    if (!settings.isConfigured) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: const Text('执行命令需要先连接你的服务器'),
-          action: SnackBarAction(
-            label: '去配置',
-            onPressed: () => widget.onOpenServers?.call(),
-          ),
+          content: const Text('请先在设置配置 API Key（或切换到远程 Agent）'),
+          action: widget.onOpenSettings == null
+              ? null
+              : SnackBarAction(
+                  label: '设置',
+                  onPressed: widget.onOpenSettings!,
+                ),
         ),
       );
       return;

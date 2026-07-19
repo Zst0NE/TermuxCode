@@ -176,33 +176,48 @@ class ChatProvider extends ChangeNotifier {
     _scheduleSave();
 
     try {
-      if (!_ssh.isConnected) {
-        _messages.add(ChatMessage(
-          role: ChatRole.assistant,
-          text: '先连接你的远程主机。连上后我会优先使用主机上的 Claude / Codex / OpenCode（若已安装）。',
-        ));
-        return;
-      }
+      final cfg = await _store.loadLlmConfig();
+      final key = (await _store.loadLlmApiKey()) ?? '';
+      final hasKey = cfg.isConfigured && key.trim().isNotEmpty;
+      final connected = _ssh.isConnected;
 
+      // ── Remote native agent (needs host + CLI) ──────────────────────────
       if (_backend == AgentBackend.remoteNative) {
+        if (!connected) {
+          _messages.add(ChatMessage(
+            role: ChatRole.assistant,
+            text:
+                '当前是「远程 Agent」模式，需要先连接你的服务器。\n'
+                '也可以把右上角后端改成「内置 Agent」，用 API Key 先聊天。',
+          ));
+          return;
+        }
         await _sendViaRemoteNative(text.trim());
         return;
       }
 
-      // Builtin harness path (BYOK).
-      final cfg = await _store.loadLlmConfig();
-      final key = (await _store.loadLlmApiKey()) ?? '';
-      if (!cfg.isConfigured || key.trim().isEmpty) {
+      // ── Builtin agent (BYOK) ────────────────────────────────────────────
+      if (!hasKey) {
         _messages.add(ChatMessage(
           role: ChatRole.assistant,
-          text: '内置 Agent 需要 API Key。也可切换到「远程 Agent」使用主机上的 Claude/Codex/OpenCode。',
+          text:
+              '请先在「设置」填写 Base URL / 模型 / API Key。\n'
+              '若服务器已装 Claude/Codex/OpenCode，可切换到「远程 Agent」。',
         ));
         return;
       }
 
+      // Pure chat without SSH: no tools, just LLM conversation.
+      // With SSH: full tool loop (Claude-like).
+      final useTools = connected;
+      if (!connected) {
+        // Soft notice once per turn is enough via assistant reply if tools needed;
+        // for pure Q&A we just chat.
+      }
+
       await for (final event in _runtime.run(
         userText: text.trim(),
-        mode: _mode,
+        mode: useTools ? _mode : AgentMode.plan, // plan still may filter tools
         config: cfg,
         apiKey: key,
         history: [
@@ -210,19 +225,25 @@ class ChatProvider extends ChangeNotifier {
             if (m.id != userMsg.id) m,
         ],
         onApprove: (req) async {
-          // Auto/Bypass may still emit ask for non-allowlist; Completer UI.
           final completer = Completer<bool>();
           _approvalWaiters[req.id] = completer;
           notifyListeners();
           return completer.future;
         },
+        enableTools: useTools,
       )) {
         _handleEvent(event, userMsg.text);
       }
-    } catch (e) {
+
+      if (!connected) {
+        // If the model still tried tools, runtime won't execute them when
+        // enableTools=false; add a tip only if last assistant mentions tools.
+      }
+    } catch (e, st) {
+      debugPrint('sendMessage error: $e\n$st');
       _messages.add(ChatMessage(
         role: ChatRole.assistant,
-        text: 'Agent 运行失败：$e',
+        text: '对话出错：$e\n\n请检查网络、API Key 与 Base URL。',
       ));
       _error = '$e';
     } finally {

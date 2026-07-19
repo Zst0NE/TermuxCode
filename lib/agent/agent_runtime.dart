@@ -30,6 +30,8 @@ class AgentRuntime {
   final TodoStore? todos;
 
   /// Run one user turn under [mode].
+  ///
+  /// [enableTools] false = pure chat (no tool schemas), for offline/no-SSH Q&A.
   Stream<AgentEvent> run({
     required String userText,
     required AgentMode mode,
@@ -37,6 +39,7 @@ class AgentRuntime {
     required String apiKey,
     required Future<bool> Function(ToolCallRequest request) onApprove,
     List<ChatMessage> history = const [],
+    bool enableTools = true,
   }) async* {
     yield AgentModeInfo(mode);
     yield AgentUserMessage(userText);
@@ -49,10 +52,21 @@ class AgentRuntime {
     final todoHint =
         (todos != null && todos!.summary.isNotEmpty) ? '\n${todos!.summary}\n' : '';
     final mem = memory?.asSystemSuffix() ?? '';
-    final system = '${contextBuilder.systemPrompt(mode)}$todoHint$mem';
-    final maxSteps = config.maxSteps;
+    var system = '${contextBuilder.systemPrompt(mode)}$todoHint$mem';
+    if (!enableTools) {
+      system = '''
+$system
+
+# Important
+Tools are DISABLED for this turn (no remote host connected).
+Answer helpfully in natural language only. Do not pretend to run commands.
+If the user needs remote execution, ask them to connect a server first.
+''';
+    }
+    final maxSteps = enableTools ? config.maxSteps : 1;
     var steps = 0;
-    final tools = registry.openAiToolsPayload(mode);
+    final tools =
+        enableTools ? registry.openAiToolsPayload(mode) : <Map<String, dynamic>>[];
 
     try {
       while (steps < maxSteps) {
@@ -63,7 +77,7 @@ class AgentRuntime {
           apiKey: apiKey,
           messages: conversation,
           systemPrompt: system,
-          tools: tools.isEmpty ? null : tools,
+          tools: tools.isEmpty ? const [] : tools,
         )) {
           switch (ev) {
             case LlmTextDelta(:final delta):
@@ -74,29 +88,31 @@ class AgentRuntime {
         }
         turn ??= const LlmTurnResult();
 
-        final mapped = <ToolCallRequest>[
-          for (final tc in turn.toolCalls)
-            ToolCallRequest(
-              id: tc.id,
-              name: tc.name.isEmpty ? 'shell' : tc.name,
-              arguments: tc.arguments.isNotEmpty
-                  ? tc.arguments
-                  : {
-                      if (tc.command.isNotEmpty) 'command': tc.command,
-                      if (tc.rationale != null) 'rationale': tc.rationale,
-                    },
-            ),
-        ];
+        final mapped = enableTools
+            ? <ToolCallRequest>[
+                for (final tc in turn.toolCalls)
+                  ToolCallRequest(
+                    id: tc.id,
+                    name: tc.name.isEmpty ? 'shell' : tc.name,
+                    arguments: tc.arguments.isNotEmpty
+                        ? tc.arguments
+                        : {
+                            if (tc.command.isNotEmpty) 'command': tc.command,
+                            if (tc.rationale != null) 'rationale': tc.rationale,
+                          },
+                  ),
+              ]
+            : <ToolCallRequest>[];
 
         yield AgentAssistantText(turn.text, toolCalls: mapped);
 
         conversation.add(ChatMessage(
           role: ChatRole.assistant,
           text: turn.text,
-          toolCalls: turn.toolCalls,
+          toolCalls: enableTools ? turn.toolCalls : const [],
         ));
 
-        if (mapped.isEmpty) {
+        if (!enableTools || mapped.isEmpty) {
           yield const AgentTurnDone();
           return;
         }

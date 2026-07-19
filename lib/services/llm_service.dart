@@ -382,16 +382,19 @@ Rules:
   ) async {
     final url = _openAiUrl(config.baseUrl);
 
-    final body = jsonEncode({
+    final bodyMap = <String, dynamic>{
       'model': config.model,
       'temperature': config.temperature,
       'messages': [
         {'role': 'system', 'content': systemPrompt},
         ..._toOpenAiMessages(messages),
       ],
-      'tools': tools,
-      'tool_choice': 'auto',
-    });
+    };
+    if (tools.isNotEmpty) {
+      bodyMap['tools'] = tools;
+      bodyMap['tool_choice'] = 'auto';
+    }
+    final body = jsonEncode(bodyMap);
 
     final response = await _post(
       url: url,
@@ -637,14 +640,17 @@ Rules:
   ) async {
     final url = _anthropicUrl(config.baseUrl);
 
-    final body = jsonEncode({
+    final bodyMap = <String, dynamic>{
       'model': config.model,
       'max_tokens': 4096,
       'temperature': config.temperature,
       'system': systemPrompt,
-      'tools': tools,
       'messages': _toAnthropicMessages(messages),
-    });
+    };
+    if (tools.isNotEmpty) {
+      bodyMap['tools'] = tools;
+    }
+    final body = jsonEncode(bodyMap);
 
     final response = await _post(
       url: url,
@@ -769,7 +775,7 @@ Rules:
     List<Map<String, dynamic>> tools,
   ) async* {
     final url = _openAiUrl(config.baseUrl);
-    final body = jsonEncode({
+    final bodyMap = <String, dynamic>{
       'model': config.model,
       'temperature': config.temperature,
       'stream': true,
@@ -777,9 +783,12 @@ Rules:
         {'role': 'system', 'content': systemPrompt},
         ..._toOpenAiMessages(messages),
       ],
-      'tools': tools,
-      'tool_choice': 'auto',
-    });
+    };
+    if (tools.isNotEmpty) {
+      bodyMap['tools'] = tools;
+      bodyMap['tool_choice'] = 'auto';
+    }
+    final body = jsonEncode(bodyMap);
 
     final request = http.Request('POST', url)
       ..headers.addAll({
