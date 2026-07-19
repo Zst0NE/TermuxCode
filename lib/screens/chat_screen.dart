@@ -251,7 +251,16 @@ class _ChatScreenState extends State<ChatScreen> {
               color: cs.surfaceContainerHighest,
               textColor: cs.onSurfaceVariant,
             ),
-          if (_showAdvanced) const RemoteCliBar(),
+          // Always show engine picker when connected (Claude / Codex / OpenCode)
+          if (session.isConnected) const RemoteCliBar(),
+          if (_showAdvanced)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              child: Text(
+                '高级：/cli 可非交互跑一次命令；对话默认走上面选中的远程 Agent PTY',
+                style: TextStyle(fontSize: 11, color: cs.outline),
+              ),
+            ),
           if (chat.todos.items.isNotEmpty)
             Material(
               color: const Color(0xFF121A18),

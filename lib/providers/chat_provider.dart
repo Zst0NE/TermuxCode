@@ -311,10 +311,11 @@ class ChatProvider extends ChangeNotifier {
         await Future<void>.delayed(const Duration(milliseconds: 1200));
       }
 
-      // Streaming bubble
+      // Streaming bubble — full remote transcript (no hard 12k clip in UI)
       final streamMsg = ChatMessage(
         role: ChatRole.assistant,
         text: '',
+        source: 'remote',
       );
       _remoteStreamMsgId = streamMsg.id;
       _messages.add(streamMsg);
@@ -343,16 +344,18 @@ class ChatProvider extends ChangeNotifier {
         final idx = _messages.indexWhere((m) => m.id == id);
         if (idx < 0) return;
         final prev = _messages[idx];
-        // Cap bubble size for mobile UI.
+        // Keep remote output as complete as practical (memory soft cap 500KB).
         var next = '${prev.text}$text';
-        if (next.length > 120000) {
-          next = '${next.substring(next.length - 100000)}\n…(截断旧输出)';
+        if (next.length > 500000) {
+          next =
+              '…(仅保留最新输出)\n${next.substring(next.length - 400000)}';
         }
         _messages[idx] = ChatMessage(
           id: prev.id,
           role: ChatRole.assistant,
           text: next,
           createdAt: prev.createdAt,
+          source: 'remote',
         );
         notifyListeners();
         _scheduleSave();

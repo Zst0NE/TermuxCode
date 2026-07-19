@@ -140,6 +140,9 @@ class ChatMessage {
 
   final DateTime createdAt;
 
+  /// `remote` = host Claude/Codex/OpenCode process stream (collapsible in UI).
+  final String? source;
+
   ChatMessage({
     String? id,
     required this.role,
@@ -147,12 +150,14 @@ class ChatMessage {
     this.toolCalls = const [],
     this.toolResult,
     DateTime? createdAt,
+    this.source,
   })  : id = id ?? const Uuid().v4(),
         createdAt = createdAt ?? DateTime.now();
 
   bool get hasToolCalls => toolCalls.isNotEmpty;
+  bool get isRemoteProcess => source == 'remote';
 
-  static String _clip(String s, [int max = 8000]) =>
+  static String _clip(String s, [int max = 50000]) =>
       s.length <= max ? s : '${s.substring(0, max)}…';
 
   Map<String, dynamic> toJson() {
@@ -176,6 +181,7 @@ class ChatMessage {
       'toolCalls': toolCalls.map((t) => t.toJson()).toList(),
       if (trJson != null) 'toolResult': trJson,
       'createdAt': createdAt.toIso8601String(),
+      if (source != null) 'source': source,
     };
   }
 
@@ -197,6 +203,7 @@ class ChatMessage {
       toolResult: tr is Map<String, dynamic> ? ToolResult.fromJson(tr) : null,
       createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
           DateTime.now(),
+      source: json['source'] as String?,
     );
   }
 }
