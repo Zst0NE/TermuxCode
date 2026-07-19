@@ -298,20 +298,13 @@ class ChatProvider extends ChangeNotifier {
     }
 
     try {
+      // Ensure kind is bound (no interactive TUI start).
       if (!_remoteAgent.isRunning || _remoteAgent.kind != kind) {
-        _messages.add(ChatMessage(
-          role: ChatRole.assistant,
-          text: '正在主机上启动 **${kind.label}**（PTY 会话）…',
-        ));
-        notifyListeners();
         await _remoteSub?.cancel();
         await _remoteAgent.start(kind);
         _remoteSub = _remoteAgent.events.listen(_onRemoteAgentEvent);
-        // Give CLI a moment to boot.
-        await Future<void>.delayed(const Duration(milliseconds: 1200));
       }
 
-      // Streaming bubble — full remote transcript (no hard 12k clip in UI)
       final streamMsg = ChatMessage(
         role: ChatRole.assistant,
         text: '',
@@ -321,10 +314,8 @@ class ChatProvider extends ChangeNotifier {
       _messages.add(streamMsg);
       notifyListeners();
 
-      _remoteAgent.send(payload);
-
-      // Wait until idle gap, prompt-like waiting, or timeout.
-      await _waitRemoteTurnIdle(timeout: const Duration(minutes: 8));
+      // One-shot non-interactive: full model response streamed back.
+      await _remoteAgent.runTurn(payload);
     } catch (e) {
       _messages.add(ChatMessage(
         role: ChatRole.assistant,

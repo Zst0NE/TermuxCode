@@ -27,76 +27,62 @@ class RemoteCliAdapter {
       RemoteCliKind.opencode => '''
 set +e
 PROMPT=$q
-if command -v opencode >/dev/null 2>&1; then
-  # Newer CLIs often expose a non-interactive "run" subcommand.
-  if opencode run --help >/dev/null 2>&1; then
-    opencode run "\$PROMPT"
-    exit \$?
-  fi
-  if opencode exec --help >/dev/null 2>&1; then
-    opencode exec "\$PROMPT"
-    exit \$?
-  fi
-  HELP=\$(opencode --help 2>&1 | head -n 80)
-  if echo "\$HELP" | grep -qE -- '--print|\\s-p(\\s|\$)'; then
-    opencode -p "\$PROMPT"
-    exit \$?
-  fi
-  echo "TermuxCode: OpenCode 已安装，但未找到非交互入口（run/exec/-p）。"
-  echo "请在「终端」页交互运行: opencode"
-  echo "----- opencode --help (截断) -----"
-  echo "\$HELP"
-  exit 2
-else
+if ! command -v opencode >/dev/null 2>&1; then
   echo "TermuxCode: 主机未找到 opencode"
   exit 127
 fi
+# Prefer non-interactive print/run paths for full text responses.
+if opencode run --help >/dev/null 2>&1; then
+  opencode run "\$PROMPT" 2>&1
+  exit \$?
+fi
+if opencode --help 2>&1 | grep -qE -- '--print|\\s-p(\\s|\$)'; then
+  opencode -p "\$PROMPT" 2>&1
+  exit \$?
+fi
+# Last resort: some builds accept positional prompt
+opencode "\$PROMPT" 2>&1
+exit \$?
 ''',
       RemoteCliKind.claude => '''
 set +e
 PROMPT=$q
-if command -v claude >/dev/null 2>&1; then
-  HELP=\$(claude --help 2>&1 | head -n 80)
-  if echo "\$HELP" | grep -qE -- '--print|\\s-p(\\s|\$)' || claude -p --help >/dev/null 2>&1; then
-    claude -p "\$PROMPT"
-    exit \$?
-  fi
-  if claude --print --help >/dev/null 2>&1; then
-    claude --print "\$PROMPT"
-    exit \$?
-  fi
-  echo "TermuxCode: Claude Code 已安装，但未找到 -p/--print 非交互模式。"
-  echo "请在「终端」页运行: claude"
-  echo "----- claude --help (截断) -----"
-  echo "\$HELP"
-  exit 2
-else
+if ! command -v claude >/dev/null 2>&1; then
   echo "TermuxCode: 主机未找到 claude"
   exit 127
 fi
+# Claude Code print mode — full response, no TUI
+if claude -p --help >/dev/null 2>&1 || claude --help 2>&1 | grep -qE -- '--print|\\s-p(\\s|\$)'; then
+  claude -p "\$PROMPT" 2>&1
+  exit \$?
+fi
+if claude --print --help >/dev/null 2>&1; then
+  claude --print "\$PROMPT" 2>&1
+  exit \$?
+fi
+echo "TermuxCode: claude 不支持 -p/--print，无法非交互调用"
+claude --help 2>&1 | head -n 30
+exit 2
 ''',
       RemoteCliKind.codex => '''
 set +e
 PROMPT=$q
-if command -v codex >/dev/null 2>&1; then
-  if codex exec --help >/dev/null 2>&1; then
-    codex exec "\$PROMPT"
-    exit \$?
-  fi
-  HELP=\$(codex --help 2>&1 | head -n 80)
-  if echo "\$HELP" | grep -q exec; then
-    codex exec "\$PROMPT"
-    exit \$?
-  fi
-  echo "TermuxCode: Codex 已安装，但未找到非交互 exec 入口。"
-  echo "请在「终端」页运行: codex"
-  echo "----- codex --help (截断) -----"
-  echo "\$HELP"
-  exit 2
-else
+if ! command -v codex >/dev/null 2>&1; then
   echo "TermuxCode: 主机未找到 codex"
   exit 127
 fi
+# Never start interactive TUI from chat — Codex rejects dumb TERM and TUI is noisy.
+if codex exec --help >/dev/null 2>&1; then
+  codex exec "\$PROMPT" 2>&1
+  exit \$?
+fi
+if codex --help 2>&1 | grep -qE 'exec| -- '; then
+  codex exec "\$PROMPT" 2>&1
+  exit \$?
+fi
+echo "TermuxCode: codex 未找到非交互 exec 入口"
+codex --help 2>&1 | head -n 40
+exit 2
 ''',
       RemoteCliKind.unknown => 'echo "unknown CLI"; exit 1',
     };

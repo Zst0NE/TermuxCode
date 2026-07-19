@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 
 import '../../services/ssh_service.dart';
 import '../../services/ssh_shell_session.dart';
+import 'remote_cli_adapter.dart';
 import 'remote_cli_kind.dart';
 
 /// High-level events from a remote native agent session (Claude/Codex/OpenCode).
@@ -38,7 +39,7 @@ enum AgentBackend {
   /// Phone-side AgentRuntime + BYOK LLM + SSH tools.
   builtin,
 
-  /// Host-side native CLI over a dedicated SSH PTY (P2).
+  /// Host-side native CLI (Claude/Codex/OpenCode) — non-interactive print/exec.
   remoteNative,
 }
 
@@ -49,33 +50,27 @@ extension AgentBackendLabel on AgentBackend {
       };
 }
 
-/// Clean PTY noise while keeping real agent text intact.
-///
-/// Critically removes Kitty/fixterm keyboard protocol fragments like `7u`, `?0u`,
-/// which otherwise show up as garbage replies in chat.
-String cleanPtyText(String input, {bool keepAnsiColors = false}) {
+/// Strip terminal control sequences that are NOT agent content.
+/// Keeps real model text intact; removes CSI/Kitty keyboard crumbs like `7u`.
+String cleanPtyText(String input) {
   var s = input;
-  // OSC (ESC ] ... BEL or ST)
   s = s.replaceAll(RegExp(r'\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)'), '');
-  // Full CSI: ESC [ (private?) params intermediates final
-  // Covers: ESC[?7u  ESC[>1u  ESC[0m  ESC[2J  ESC[?2004h  etc.
   s = s.replaceAll(RegExp(r'\x1B\[[\x30-\x3F]*[\x20-\x2F]*[\x40-\x7E]'), '');
-  // SS2/SS3 / other two-byte ESC
   s = s.replaceAll(RegExp(r'\x1B[NO]'), '');
-  // Remaining ESC + one byte
   s = s.replaceAll(RegExp(r'\x1B.'), '');
-  // Bare control chars except \n \t
   s = s.replaceAll(RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]'), '');
-  // Leftover keyboard-protocol crumbs sometimes split across chunks: "7u" "?0u" ">1u"
+  // Orphan keyboard-protocol tokens when ESC was lost
   s = s.replaceAll(RegExp(r'(?<![A-Za-z0-9])[?>]?\d{1,3}u(?![A-Za-z0-9])'), '');
-  // Normalize newlines
   s = s.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
-  // Collapse huge blank runs but keep structure
   s = s.replaceAll(RegExp(r'\n{4,}'), '\n\n\n');
   return s;
 }
 
-/// Long-lived PTY session running a native coding agent on the SSH host.
+/// Drives host-side Claude / Codex / OpenCode for chat turns.
+///
+/// **Not** interactive TUI (Codex refuses TERM=dumb and TUI is noisy).
+/// Each [runTurn] runs a **non-interactive** one-shot (`claude -p`, `codex exec`,
+/// `opencode run`) so the full model response returns as clean text.
 class RemoteAgentSession extends ChangeNotifier {
   RemoteAgentSession(this._ssh);
 
@@ -85,22 +80,19 @@ class RemoteAgentSession extends ChangeNotifier {
   StreamSubscription<Uint8List>? _outSub;
   final _controller = StreamController<RemoteAgentEvent>.broadcast();
 
-  /// Incomplete CSI/ESC across TCP chunks.
-  String _pendingEsc = '';
-
   RemoteCliKind? _kind;
   bool _running = false;
-  final _rawBuf = StringBuffer();
+  bool _turnActive = false;
   final _cleanBuf = StringBuffer();
   DateTime _lastOutputAt = DateTime.fromMillisecondsSinceEpoch(0);
+  Completer<void>? _turnDone;
 
   Stream<RemoteAgentEvent> get events => _controller.stream;
   bool get isRunning => _running;
+  bool get turnActive => _turnActive;
   RemoteCliKind? get kind => _kind;
   DateTime get lastOutputAt => _lastOutputAt;
   int get outputLength => _cleanBuf.length;
-
-  /// Full cleaned transcript (for UI).
   String get transcript => _cleanBuf.toString();
 
   String get tailText {
@@ -110,135 +102,128 @@ class RemoteAgentSession extends ChangeNotifier {
   }
 
   bool get looksLikeWaitingForInput {
-    final t = tailText.trimRight();
-    if (t.isEmpty) return false;
-    final lines = t.split('\n').where((l) => l.trim().isNotEmpty).toList();
-    if (lines.isEmpty) return false;
-    final last = lines.last.trim();
-    if (RegExp(r'[❯>:%#$]\s*$').hasMatch(last)) return true;
-    if (RegExp(r'(Human|User|You)\s*:\s*$', caseSensitive: false)
-        .hasMatch(last)) {
-      return true;
-    }
-    final low = last.toLowerCase();
-    if (low.contains('waiting for') ||
-        low.contains('press enter') ||
-        last.contains('请输入') ||
-        last.contains('等待')) {
-      return true;
-    }
-    return false;
+    // Non-interactive turns finish with process exit; idle heuristic secondary.
+    return !_turnActive && _cleanBuf.isNotEmpty;
   }
 
+  /// Bind preferred CLI kind (does not start a TUI).
   Future<void> start(RemoteCliKind kind) async {
     if (!_ssh.isConnected) {
       throw StateError('SSH not connected');
     }
     await stop();
     _kind = kind;
-    _rawBuf.clear();
-    _cleanBuf.clear();
-    _pendingEsc = '';
-    _session = await _ssh.openShell(cols: 120, rows: 40);
     _running = true;
+    _cleanBuf.clear();
+    _controller.add(RemoteAgentStatus(
+      '已选择 ${kind.label}（非交互 print/exec，完整返回）',
+    ));
+    notifyListeners();
+  }
+
+  /// Run one chat turn via non-interactive host CLI; streams cleaned stdout.
+  Future<void> runTurn(String userText) async {
+    final kind = _kind;
+    if (kind == null || kind == RemoteCliKind.unknown) {
+      _controller.add(const RemoteAgentError('未选择远程 CLI'));
+      return;
+    }
+    if (!_ssh.isConnected) {
+      _controller.add(const RemoteAgentError('SSH 未连接'));
+      return;
+    }
+    if (_turnActive) {
+      _controller.add(const RemoteAgentError('上一轮远程调用尚未结束'));
+      return;
+    }
+
+    _turnActive = true;
+    _cleanBuf.clear();
     _lastOutputAt = DateTime.now();
     notifyListeners();
 
-    _outSub = _session!.stdout.listen((data) {
-      final chunk = utf8.decode(data, allowMalformed: true);
-      if (chunk.isEmpty) return;
-      _rawBuf.write(chunk);
-      final joined = '$_pendingEsc$chunk';
-      // Hold trailing incomplete ESC sequence for next chunk.
-      final split = _splitIncompleteEsc(joined);
-      _pendingEsc = split.$2;
-      final clean = cleanPtyText(split.$1);
-      if (clean.isEmpty) return;
-      _cleanBuf.write(clean);
-      _lastOutputAt = DateTime.now();
-      _controller.add(RemoteAgentText(clean));
-    });
+    final cmd = RemoteCliAdapter.buildCommand(kind, userText);
+    // Wrap so we always exit the temp shell.
+    final script = '''
+set +e
+export TERM=xterm-256color
+export NO_COLOR=1
+$cmd
+CODE=\$?
+exit \$CODE
+''';
 
-    _session!.done.then((_) {
-      // Flush remainder
-      if (_pendingEsc.isNotEmpty) {
-        final clean = cleanPtyText(_pendingEsc);
-        _pendingEsc = '';
-        if (clean.isNotEmpty) {
-          _cleanBuf.write(clean);
-          _controller.add(RemoteAgentText(clean));
-        }
-      }
-      _running = false;
+    try {
+      _session = await _ssh.openShell(cols: 120, rows: 40);
+      final done = Completer<void>();
+      _turnDone = done;
+
+      _outSub = _session!.stdout.listen((data) {
+        final chunk = utf8.decode(data, allowMalformed: true);
+        if (chunk.isEmpty) return;
+        final clean = cleanPtyText(chunk);
+        if (clean.isEmpty) return;
+        _cleanBuf.write(clean);
+        _lastOutputAt = DateTime.now();
+        _controller.add(RemoteAgentText(clean));
+      });
+
+      _session!.done.then((_) {
+        if (!done.isCompleted) done.complete();
+      });
+
+      _session!.writeString(script);
+
+      // Wait for shell exit or timeout
+      await done.future.timeout(
+        const Duration(minutes: 10),
+        onTimeout: () {
+          try {
+            _session?.writeString('\x03');
+            _session?.close();
+          } catch (_) {}
+        },
+      );
+    } catch (e) {
+      _controller.add(RemoteAgentError('$e'));
+    } finally {
+      await _outSub?.cancel();
+      _outSub = null;
+      try {
+        _session?.close();
+      } catch (_) {}
+      _session = null;
+      _turnActive = false;
+      _turnDone = null;
       _controller.add(const RemoteAgentExit(null));
       notifyListeners();
-    });
-
-    // Minimal env; avoid programs thinking we support fancy keyboard protocols.
-    _session!.writeString('export TERM=dumb\n');
-    _session!.writeString('export NO_COLOR=1\n');
-    _session!.writeString('export COLORTERM=\n');
-    _session!.writeString(_launchCommand(kind));
-    _controller.add(RemoteAgentStatus('在主机启动 ${kind.label}…'));
-  }
-
-  /// If buffer ends with incomplete ESC sequence, keep it for next read.
-  (String complete, String hold) _splitIncompleteEsc(String s) {
-    final idx = s.lastIndexOf('\x1B');
-    if (idx < 0) return (s, '');
-    final tail = s.substring(idx);
-    // Complete CSI ends with @-~ ; OSC ends with BEL or ST
-    if (tail.startsWith('\x1B[')) {
-      if (RegExp(r'\x1B\[[\x30-\x3F]*[\x20-\x2F]*[\x40-\x7E]').hasMatch(tail)) {
-        return (s, '');
-      }
-      return (s.substring(0, idx), tail);
     }
-    if (tail.startsWith('\x1B]')) {
-      if (tail.contains('\x07') || tail.contains('\x1B\\')) return (s, '');
-      return (s.substring(0, idx), tail);
-    }
-    if (tail.length == 1) return (s.substring(0, idx), tail);
-    return (s, '');
   }
 
-  String _launchCommand(RemoteCliKind kind) {
-    // Launch without extra interactive banners when possible.
-    return switch (kind) {
-      RemoteCliKind.claude =>
-        'if command -v claude >/dev/null 2>&1; then claude 2>&1; else echo "claude not found"; fi\n',
-      RemoteCliKind.codex =>
-        'if command -v codex >/dev/null 2>&1; then codex 2>&1; else echo "codex not found"; fi\n',
-      RemoteCliKind.opencode =>
-        'if command -v opencode >/dev/null 2>&1; then opencode 2>&1; else echo "opencode not found"; fi\n',
-      RemoteCliKind.unknown => 'echo "unknown agent"; exit 1\n',
-    };
-  }
-
+  /// Back-compat: treat send as a full non-interactive turn.
   void send(String text) {
-    final s = _session;
-    if (s == null || !_running) {
-      _controller.add(const RemoteAgentError('远端 Agent 未运行'));
-      return;
-    }
-    s.writeString(text.endsWith('\n') ? text : '$text\n');
-    _lastOutputAt = DateTime.now();
+    // Fire-and-forget; caller should await runTurn when possible.
+    unawaited(runTurn(text));
   }
 
-  void interrupt() => _session?.writeString('\x03');
+  void interrupt() {
+    try {
+      _session?.writeString('\x03');
+      _session?.close();
+    } catch (_) {}
+  }
 
   Future<void> stop() async {
+    interrupt();
     await _outSub?.cancel();
     _outSub = null;
     try {
-      _session?.writeString('\x03');
-      await Future<void>.delayed(const Duration(milliseconds: 80));
       _session?.close();
     } catch (_) {}
     _session = null;
     _running = false;
+    _turnActive = false;
     _kind = null;
-    _pendingEsc = '';
     notifyListeners();
   }
 
